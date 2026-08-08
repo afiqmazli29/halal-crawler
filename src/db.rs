@@ -1,29 +1,25 @@
 use serde_json::Value;
-use sqlx::sqlite::SqlitePool;
+use sqlx::PgPool;
 
-use crate::types::{Error, SubStrategy};
+use crate::types::{Error, pick_str};
 
-pub async fn init(db_url: &str) -> Result<SqlitePool, Error> {
-    let pool = SqlitePool::connect(db_url).await?;
-
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS categories (
-            code TEXT PRIMARY KEY,
-            name TEXT NOT NULL
-        )",
-    )
-    .execute(&pool)
-    .await?;
+pub async fn init(db_url: &str) -> Result<PgPool, Error> {
+    let pool = PgPool::connect(db_url).await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS companies (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            address TEXT NOT NULL,
-            expiry_date TEXT NOT NULL,
-            category_code TEXT NOT NULL REFERENCES categories(code),
-            bil INTEGER NOT NULL,
-            scraped_at TEXT NOT NULL DEFAULT (datetime('now')),
+            id SERIAL PRIMARY KEY,
+            category_code TEXT NOT NULL,
+            name TEXT,
+            address TEXT,
+            state TEXT,
+            phone_no TEXT,
+            fax_no TEXT,
+            email TEXT,
+            website TEXT,
+            reference_no TEXT,
+            officer TEXT,
+            scraped_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             UNIQUE(category_code, name)
         )",
     )
@@ -32,15 +28,15 @@ pub async fn init(db_url: &str) -> Result<SqlitePool, Error> {
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS products (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             name TEXT NOT NULL,
-            address TEXT,
-            expiry_date TEXT,
-            category_code TEXT NOT NULL REFERENCES categories(code),
+            brand TEXT,
+            category_code TEXT NOT NULL,
             subcategory_code TEXT NOT NULL,
-            bil INTEGER NOT NULL,
-            scraped_at TEXT NOT NULL DEFAULT (datetime('now')),
-            UNIQUE(category_code, subcategory_code, name)
+            company_id INTEGER REFERENCES companies(id),
+            expiry_date TEXT,
+            scraped_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE(category_code, subcategory_code, name, brand)
         )",
     )
     .execute(&pool)
@@ -50,19 +46,8 @@ pub async fn init(db_url: &str) -> Result<SqlitePool, Error> {
     Ok(pool)
 }
 
-pub async fn seed_categories(pool: &SqlitePool, strategies: &[SubStrategy]) -> Result<(), Error> {
-    for s in strategies {
-        sqlx::query("INSERT OR IGNORE INTO categories (code, name) VALUES (?, ?)")
-            .bind(s.category_code)
-            .bind(s.category_name)
-            .execute(pool)
-            .await?;
-    }
-    Ok(())
-}
-
 pub async fn insert_companies(
-    pool: &SqlitePool,
+    pool: &PgPool,
     records: &[Value],
     category_code: &str,
 ) -> Result<usize, Error> {
@@ -71,15 +56,40 @@ pub async fn insert_companies(
     }
     let mut tx = pool.begin().await?;
     for r in records {
+        let name = pick_str(r, &["nama_syarikat", "name", "company_name", "nama"]);
+        let address = pick_str(r, &["alamat", "address"]);
+        let state = pick_str(r, &["negeri", "state"]);
+        let phone = pick_str(r, &["no_telefon", "phone_no", "phone", "telefon"]);
+        let fax = pick_str(r, &["no_fax", "fax_no", "fax"]);
+        let email = pick_str(r, &["e_mel", "email", "emel"]);
+        let website = pick_str(r, &["laman_web", "website", "web"]);
+        let ref_no = pick_str(r, &["no_rujukan", "reference_no", "reference"]);
+        let officer = pick_str(r, &["pegawai", "officer", "nama_pegawai"]);
+
         sqlx::query(
-            "INSERT OR REPLACE INTO companies (name, address, expiry_date, category_code, bil, scraped_at)
-             VALUES (?, ?, ?, ?, ?, datetime('now'))",
+            "INSERT INTO companies (category_code, name, address, state, phone_no, fax_no, email, website, reference_no, officer)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+             ON CONFLICT(category_code, name) DO UPDATE SET
+                address = excluded.address,
+                state = excluded.state,
+                phone_no = excluded.phone_no,
+                fax_no = excluded.fax_no,
+                email = excluded.email,
+                website = excluded.website,
+                reference_no = excluded.reference_no,
+                officer = excluded.officer,
+                scraped_at = NOW()",
         )
-        .bind(r["name"].as_str().unwrap_or(""))
-        .bind(r["address"].as_str().unwrap_or(""))
-        .bind(r["expiry_date"].as_str().unwrap_or(""))
         .bind(category_code)
-        .bind(r["bil"].as_i64().unwrap_or(0))
+        .bind(&name)
+        .bind(&address)
+        .bind(&state)
+        .bind(&phone)
+        .bind(&fax)
+        .bind(&email)
+        .bind(&website)
+        .bind(&ref_no)
+        .bind(&officer)
         .execute(&mut *tx)
         .await?;
     }
@@ -88,7 +98,7 @@ pub async fn insert_companies(
 }
 
 pub async fn insert_products(
-    pool: &SqlitePool,
+    pool: &PgPool,
     records: &[Value],
     category_code: &str,
     subcategory_code: &str,
@@ -98,16 +108,22 @@ pub async fn insert_products(
     }
     let mut tx = pool.begin().await?;
     for r in records {
+        let name = pick_str(r, &["name", "nama", "product_name"]);
+        let brand = pick_str(r, &["brand", "jenama"]);
+        let expiry = pick_str(r, &["expiry_date", "tarikh_tamat", "tempoh_sah_laku"]);
+
         sqlx::query(
-            "INSERT OR REPLACE INTO products (name, address, expiry_date, category_code, subcategory_code, bil, scraped_at)
-             VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
+            "INSERT INTO products (name, brand, category_code, subcategory_code, expiry_date)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT(category_code, subcategory_code, name, brand) DO UPDATE SET
+                expiry_date = excluded.expiry_date,
+                scraped_at = NOW()",
         )
-        .bind(r["name"].as_str().unwrap_or(""))
-        .bind(r["address"].as_str().unwrap_or(""))
-        .bind(r["expiry_date"].as_str().unwrap_or(""))
+        .bind(&name)
+        .bind(&brand)
         .bind(category_code)
         .bind(subcategory_code)
-        .bind(r["bil"].as_i64().unwrap_or(0))
+        .bind(&expiry)
         .execute(&mut *tx)
         .await?;
     }

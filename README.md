@@ -1,81 +1,101 @@
 # Malaysia Halal Directory Scraper
 
-Scrapes the [Malaysia Halal Portal](https://myehalal.halal.gov.my/) public directory — extracting company listings across all categories and subcategories into structured JSON.
+Scrapes the [Malaysia Halal Portal](https://myehalal.halal.gov.my/) public directory — extracting company listings and product/premise listings across all categories into a PostgreSQL database.
 
 ## Quick start
 
 ```bash
-# Copy the example env file and add your Firecrawl API key
-cp .env.example .env
-# Edit .env with your key, then:
-
+cp .env.example .env   # edit DATABASE_URL if needed
 cargo run
 ```
 
-Output: `halal.db` (SQLite) + `halal_all.json` (backup).
+Requires Rust 1.85+ (edition 2024) and a running PostgreSQL instance.
+
+## How it works
+
+Two-phase scrape:
+
+1. **Phase 1 — Companies:** scrapes 9 category × `CO` (Syarikat) listing pages, then fetches each company detail page. Inserts into the `companies` table.
+2. **Phase 2 — Products & others:** scrapes 9 subcategory listings (products, premises, hotels, etc.) with pagination. Inserts into the `products` table.
+
+After both phases, a few random sample rows are printed to confirm the output.
 
 ## Database
 
-Uses **SQLite** by default (`halal.db`). To migrate to PostgreSQL:
+Uses **PostgreSQL**. The default `DATABASE_URL` (set in `main.rs`) is:
 
-1. Change `DATABASE_URL` in `.env`:
-   ```
-   DATABASE_URL=postgres://user:pass@localhost/halal
-   ```
-2. Update `Cargo.toml` — swap `sqlite` for `postgres`:
-   ```toml
-   sqlx = { version = "0.8", features = ["runtime-tokio", "postgres"] }
-   ```
-3. Change `SqlitePool` → `PgPool` in `main.rs`
-4. The rest of the code stays the same.
+```
+postgres://postgres:postgres@localhost/halal
+```
+
+Override it via the `DATABASE_URL` environment variable.
 
 ### Schema
 
+**`companies`**
+
 | Column | Type | Description |
 |--------|------|-------------|
-| `id` | INTEGER PK | Auto-increment ID |
-| `bil` | INTEGER | Row number on page |
-| `company` | TEXT | Company name |
-| `address` | TEXT | Full address |
-| `expiry_date` | TEXT | Halal expiry date(s) |
-| `category_code` | TEXT | e.g. `BG`, `FM` |
-| `category_name` | TEXT | e.g. `Barang Gunaan` |
-| `subcategory_code` | TEXT | e.g. `CO`, `BG` |
-| `subcategory_name` | TEXT | e.g. `Syarikat` |
-| `page` | INTEGER | Source page number |
-| `scraped_at` | TEXT | Timestamp of scrape |
+| `id` | `SERIAL PK` | Auto-increment ID |
+| `category_code` | `TEXT` | e.g. `BG`, `FM` |
+| `name` | `TEXT` | Company name |
+| `address` | `TEXT` | Full address |
+| `state` | `TEXT` | State (`negeri`) |
+| `phone_no` | `TEXT` | Phone number |
+| `fax_no` | `TEXT` | Fax number |
+| `email` | `TEXT` | Email address |
+| `website` | `TEXT` | Website URL |
+| `reference_no` | `TEXT` | Halal reference number |
+| `officer` | `TEXT` | Responsible officer |
+| `scraped_at` | `TIMESTAMPTZ` | Timestamp of scrape |
 
-## Data fields (JSON)
+Unique on `(category_code, name)`.
 
-| Field | Description |
-|-------|-------------|
-| `bil` | Row number on the page |
-| `company` | Company name |
-| `address` | Full address |
-| `expiry_date` | Halal certification expiry date(s) |
-| `category_code` | Main category code (e.g. `BG`, `FM`) |
-| `category_name` | Main category name |
-| `subcategory_code` | Subcategory code (e.g. `CO`, `BG`) |
-| `subcategory_name` | Subcategory name |
-| `page` | Source page number |
+**`products`**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | `SERIAL PK` | Auto-increment ID |
+| `name` | `TEXT` | Product/premise name |
+| `brand` | `TEXT` | Brand name |
+| `category_code` | `TEXT` | Parent category code |
+| `subcategory_code` | `TEXT` | Subcategory code |
+| `company_id` | `INTEGER` | FK → `companies.id` |
+| `expiry_date` | `TEXT` | Halal expiry date |
+| `scraped_at` | `TIMESTAMPTZ` | Timestamp of scrape |
+
+Unique on `(category_code, subcategory_code, name, brand)`.
 
 ## Categories scraped
 
-| Code | Name | Subcategories |
-|------|------|---------------|
-| BG | Barang Gunaan | Syarikat, Barang Gunaan |
-| FM | Farmaseutikal | Syarikat, Farmaseutikal |
-| IN | International | — |
-| KO | Kosmetik & Dandanan | Syarikat, Kosmetik |
-| MD | Peranti Perubatan | Syarikat, Peranti Perubatan |
-| OEM | OEM | Syarikat, OEM |
-| PE | Premis Makanan | Syarikat, Hotel & Resort, Premis Makanan |
-| PL | Logistik | Syarikat |
-| PR | Produk Makanan/Minuman | Syarikat, Produk |
-| PS | Rumah Sembelihan | Syarikat, Rumah Sembelih |
+| Code | Name | Phase 1 (Companies) | Phase 2 (Others) |
+|------|------|---------------------|-------------------|
+| BG | Barang Gunaan | Syarikat (`CO`) | Barang Gunaan (`BG`) |
+| FM | Farmaseutikal | Syarikat (`CO`) | Farmaseutikal (`FM`) |
+| KO | Kosmetik & Dandanan | Syarikat (`CO`) | Kosmetik (`KO`) |
+| MD | Peranti Perubatan | Syarikat (`CO`) | Peranti Perubatan (`MD`) |
+| OEM | OEM | Syarikat (`CO`) | OEM (`OEM`) |
+| PE | Premis Makanan | Syarikat (`CO`) | Hotel & Resort (`HO`), Premis Makanan (`PE`) |
+| PL | Logistik | Syarikat (`CO`) | — |
+| PR | Produk Makanan/Minuman | Syarikat (`CO`) | Produk (`PR`) |
+| PS | Rumah Sembelihan | Syarikat (`CO`) | Rumah Sembelih (`RS`) |
 
 ## Configuration
 
-- **Concurrency**: 5 parallel requests (`MAX_CONCURRENT` constant)
-- **Retries**: 3 attempts with exponential backoff for transient errors
-- **Timeout**: 90 seconds per scrape request
+| Setting | Default | Where |
+|---------|---------|-------|
+| Concurrency | 5 parallel requests | `MAX_CONCURRENT` in `config.rs` |
+| DB URL | `postgres://postgres:postgres@localhost/halal` | `DATABASE_URL` env var |
+
+## Architecture
+
+| File | Purpose |
+|------|---------|
+| `main.rs` | Entrypoint. Runs both phases, prints summary + sample rows. |
+| `config.rs` | Strategy lists (`company_strategies`, `other_strategies`), semaphore, `MAX_CONCURRENT`. |
+| `scraper.rs` | Orchestrates HTTP scraping: detail page fetching for companies, pagination for products. |
+| `http.rs` | Low-level `reqwest` helper: semaphore-guarded HTML fetch with timeout and retry. |
+| `paginate.rs` | Paginated table scraping for product/premise subcategories. |
+| `parser.rs` | Markdown table parsing for paginated product/premise listings. |
+| `db.rs` | PostgreSQL schema init + upsert inserts. `pick_str()` tries multiple JSON key variants (Malay + English). |
+| `types.rs` | `SubStrategy` struct, `Error` type alias, `pick_str()` helper. |

@@ -1,11 +1,7 @@
-mod db;
-mod parser;
-mod scraper;
-mod types;
-
 use std::sync::Arc;
 use std::time::Instant;
 
+use halal_crawler::{config, db, scraper, types};
 use types::Error;
 
 #[tokio::main]
@@ -14,35 +10,23 @@ async fn main() -> Result<(), Error> {
 
     if std::path::Path::new(".env").exists() {
         dotenvy::dotenv().ok();
-    } else {
-        eprintln!("note: no .env file found — copy .env.example to .env and add your key");
     }
 
-    let api_key = std::env::var("FIRECRAWL_API_KEY").map_err(|_| {
-        "FIRECRAWL_API_KEY not set.\n\
-         Copy .env.example to .env and add your Firecrawl API key, or:\n\
-         export FIRECRAWL_API_KEY=fc-your-key"
-    })?;
+    let db_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://postgres:postgres@localhost/halal".to_string());
 
-    let db_url =
-        std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:halal.db?mode=rwc".to_string());
-
-    let client = Arc::new(firecrawl::Client::new(&api_key)?);
-    let semaphore = types::semaphore();
+    let client = Arc::new(reqwest::Client::new());
+    let semaphore = config::semaphore();
     let pool = db::init(&db_url).await?;
 
     let base = "https://myehalal.halal.gov.my/portal-halal/v1/index.php";
-    let company_strategies = types::company_strategies();
-    let other_strategies = types::other_strategies();
-
-    db::seed_categories(&pool, &company_strategies).await?;
-    db::seed_categories(&pool, &other_strategies).await?;
+    let company_strategies = config::company_strategies();
+    let other_strategies = config::other_strategies();
 
     let mut total_companies = 0usize;
-    let mut total_others = 0usize;
-    let max_pages = u32::MAX;
+    let mut total_products = 0usize;
 
-    // ── Phase 1: Companies (CO) ───────────────────────────────────────
+    // ── Phase 1: Companies (CO) — two-level scrape ───────────────────
     println!("\n═══ PHASE 1: COMPANIES (CO) ═══");
     for (idx, s) in company_strategies.iter().enumerate() {
         println!(
@@ -53,7 +37,7 @@ async fn main() -> Result<(), Error> {
             s.category_code
         );
 
-        match scraper::scrape_subcategory(&client, &semaphore, base, s, max_pages).await {
+        match scraper::scrape_companies(&client, &semaphore, base, s).await {
             Ok(records) => {
                 let n = db::insert_companies(&pool, &records, s.category_code).await?;
                 total_companies += n;
@@ -63,7 +47,7 @@ async fn main() -> Result<(), Error> {
         }
     }
 
-    // ── Phase 2: Products & others ────────────────────────────────────
+    // ── Phase 2: Products — paginated table scrape ───────────────────
     println!("\n═══ PHASE 2: PRODUCTS & OTHERS ═══");
     for (idx, s) in other_strategies.iter().enumerate() {
         println!(
@@ -75,11 +59,11 @@ async fn main() -> Result<(), Error> {
             s.sub_code
         );
 
-        match scraper::scrape_subcategory(&client, &semaphore, base, s, max_pages).await {
+        match scraper::scrape_products(&client, &semaphore, base, s).await {
             Ok(records) => {
                 let n = db::insert_products(&pool, &records, s.category_code, s.sub_code).await?;
-                total_others += n;
-                println!("└─ {n} listings → DB");
+                total_products += n;
+                println!("└─ {n} products → DB");
             }
             Err(e) => eprintln!("└─ ✗ {e}"),
         }
@@ -90,7 +74,7 @@ async fn main() -> Result<(), Error> {
     println!("\n╔══════════════════════════════════════════╗");
     println!(
         "║  DONE: {} companies + {} others  ║",
-        total_companies, total_others
+        total_companies, total_products
     );
     println!(
         "║  in {:.1}s                          ║",
@@ -100,21 +84,24 @@ async fn main() -> Result<(), Error> {
 
     println!("\n── Sample companies ──");
     let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT name, address FROM companies ORDER BY RANDOM() LIMIT 3")
+        sqlx::query_as("SELECT name, phone_no FROM companies ORDER BY RANDOM() LIMIT 3")
             .fetch_all(&pool)
             .await?;
-    for (name, addr) in &rows {
-        println!("  {name} — {addr}");
+    for (name, phone) in &rows {
+        println!("  {name} — {}", phone.as_str());
     }
 
-    println!("\n── Sample others ──");
-    let rows: Vec<(String, Option<String>, String)> = sqlx::query_as(
-        "SELECT name, address, subcategory_code FROM products ORDER BY RANDOM() LIMIT 3",
-    )
-    .fetch_all(&pool)
-    .await?;
-    for (name, addr, code) in &rows {
-        println!("  [{code}] {name} — {}", addr.as_deref().unwrap_or("-"));
+    println!("\n── Sample products ──");
+    let rows: Vec<(String, Option<String>, Option<String>)> =
+        sqlx::query_as("SELECT name, brand, expiry_date FROM products ORDER BY RANDOM() LIMIT 3")
+            .fetch_all(&pool)
+            .await?;
+    for (name, brand, expiry) in &rows {
+        println!(
+            "  {name} — {} — {}",
+            brand.as_deref().unwrap_or("?"),
+            expiry.as_deref().unwrap_or("?")
+        );
     }
 
     Ok(())
