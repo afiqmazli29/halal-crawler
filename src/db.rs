@@ -12,6 +12,7 @@ pub async fn init(db_url: &str) -> Result<PgPool, Error> {
             category_code TEXT NOT NULL,
             name TEXT,
             address TEXT,
+            postcode TEXT,
             state TEXT,
             phone_no TEXT,
             fax_no TEXT,
@@ -25,6 +26,16 @@ pub async fn init(db_url: &str) -> Result<PgPool, Error> {
     )
     .execute(&pool)
     .await?;
+
+    // Migrate: add columns that may be missing from older schema
+    for col in ["postcode"] {
+        sqlx::query(&format!(
+            "ALTER TABLE companies ADD COLUMN IF NOT EXISTS {col} TEXT"
+        ))
+        .execute(&pool)
+        .await
+        .ok();
+    }
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS products (
@@ -58,6 +69,7 @@ pub async fn insert_companies(
     for r in records {
         let name = pick_str(r, &["nama_syarikat", "name", "company_name", "nama"]);
         let address = pick_str(r, &["alamat", "address"]);
+        let postcode = pick_str(r, &["postcode", "poskod"]);
         let state = pick_str(r, &["negeri", "state"]);
         let phone = pick_str(r, &["no_telefon", "phone_no", "phone", "telefon"]);
         let fax = pick_str(r, &["no_fax", "fax_no", "fax"]);
@@ -67,10 +79,11 @@ pub async fn insert_companies(
         let officer = pick_str(r, &["pegawai", "officer", "nama_pegawai"]);
 
         sqlx::query(
-            "INSERT INTO companies (category_code, name, address, state, phone_no, fax_no, email, website, reference_no, officer)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            "INSERT INTO companies (category_code, name, address, postcode, state, phone_no, fax_no, email, website, reference_no, officer)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
              ON CONFLICT(category_code, name) DO UPDATE SET
                 address = excluded.address,
+                postcode = excluded.postcode,
                 state = excluded.state,
                 phone_no = excluded.phone_no,
                 fax_no = excluded.fax_no,
@@ -83,6 +96,7 @@ pub async fn insert_companies(
         .bind(category_code)
         .bind(&name)
         .bind(&address)
+        .bind(&postcode)
         .bind(&state)
         .bind(&phone)
         .bind(&fax)

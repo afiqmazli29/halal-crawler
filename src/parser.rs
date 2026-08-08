@@ -1,41 +1,93 @@
 use scraper::{Html, Selector};
 use serde_json::json;
 
-pub fn parse_table(html: &str, page: u32) -> Vec<serde_json::Value> {
+use crate::constants::STATES;
+
+/// Parse the search results page — extracts company-name and company-address spans.
+pub fn parse_table(html: &str, _page: u32) -> Vec<serde_json::Value> {
     let document = Html::parse_document(html);
-    let row_selector = Selector::parse("table tr").unwrap();
-    let cell_selector = Selector::parse("td").unwrap();
 
-    let mut records = Vec::new();
+    let name_sel = Selector::parse("span.company-name").unwrap();
+    let addr_sel = Selector::parse("span.company-address").unwrap();
 
-    for row in document.select(&row_selector) {
-        let cells: Vec<String> = row
-            .select(&cell_selector)
-            .map(|td| td.inner_html())
-            .collect();
+    let names: Vec<String> = document
+        .select(&name_sel)
+        .map(|el| el.text().collect::<String>().trim().to_string())
+        .collect();
 
-        if cells.len() < 3 {
+    let addresses: Vec<String> = document
+        .select(&addr_sel)
+        .map(|el| el.text().collect::<String>().trim().to_string())
+        .collect();
+
+    let len = names.len().max(addresses.len());
+    let mut records = Vec::with_capacity(len);
+
+    for i in 0..len {
+        let name = names.get(i).cloned().unwrap_or_default();
+        if name.is_empty() {
             continue;
         }
-
-        let bil: i64 = cells[0].trim().parse().unwrap_or(0);
-        if bil == 0 {
-            continue;
-        }
-
-        let (name, address) = split_name_address(&cells[1]);
-        let expiry = clean_html(&cells[2]);
+        let address = addresses.get(i).cloned().unwrap_or_default();
+        let postcode = extract_postcode(&address);
+        let state = extract_state(&address);
 
         records.push(json!({
-            "bil": bil,
-            "name": name.trim().to_string(),
-            "address": address.trim().to_string(),
-            "expiry_date": expiry.trim().to_string(),
-            "page": page,
+            "name": name,
+            "address": address,
+            "postcode": postcode,
+            "state": state,
         }));
     }
 
     records
+}
+
+/// Extract exactly 5-digit postcode from address, or empty string.
+fn extract_postcode(addr: &str) -> String {
+    for part in addr.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        let digits: String = part.chars().filter(|c| c.is_ascii_digit()).collect();
+        if digits.len() == 5 && part.chars().filter(|c| c.is_ascii_digit()).count() == 5 {
+            return digits;
+        }
+    }
+    String::new()
+}
+
+/// Match state name from address, checking last parts first against STATES.
+fn extract_state(addr: &str) -> String {
+    let parts: Vec<&str> = addr
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let lower = addr.to_lowercase();
+
+    // Try each state against the full address (handles multi-word states)
+    for &state in STATES {
+        if lower.contains(&state.to_lowercase()) {
+            return state.to_string();
+        }
+    }
+
+    // Fallback: try matching last 2 comma-separated parts
+    if let Some(last) = parts.last() {
+        for &state in STATES {
+            if last.to_lowercase().contains(&state.to_lowercase()) {
+                return state.to_string();
+            }
+        }
+    }
+    if parts.len() >= 2 {
+        let second_last = parts[parts.len() - 2];
+        for &state in STATES {
+            if second_last.to_lowercase().contains(&state.to_lowercase()) {
+                return state.to_string();
+            }
+        }
+    }
+
+    String::new()
 }
 
 pub fn extract_total_pages(md: &str) -> u32 {
@@ -53,31 +105,9 @@ pub fn extract_total_pages(md: &str) -> u32 {
         .unwrap_or(1)
 }
 
-fn split_name_address(cell: &str) -> (String, String) {
-    let parts: Vec<&str> = cell
-        .split("<br>")
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
-    if parts.is_empty() {
-        return (String::new(), String::new());
-    }
-    (parts[0].to_string(), parts[1..].join(", "))
-}
-
-fn clean_html(s: &str) -> String {
-    s.replace("<br>", ", ")
-        .replace(['<', '>'], "")
-        .split(',')
-        .map(|p| p.trim())
-        .filter(|p| !p.is_empty())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 pub fn extract_onclick_urls(html: &str, _base: &str) -> Vec<String> {
     let mut urls = Vec::new();
-    let domain = "https://myehalal.halal.gov.my/portal-halal/v1";
+    let domain = "https://www.halal.gov.my";
 
     for line in html.lines() {
         if let Some(url) = extract_first_arg(line, "openModal(") {
@@ -108,7 +138,7 @@ pub fn extract_onclick_urls(html: &str, _base: &str) -> Vec<String> {
     urls
 }
 
-fn extract_first_arg(line: &str, fn_name: &str) -> Option<String> {
+pub fn extract_first_arg(line: &str, fn_name: &str) -> Option<String> {
     let pos = line.find(fn_name)?;
     let after = &line[pos + fn_name.len()..];
     let start = after.find('\'')?;
@@ -116,11 +146,11 @@ fn extract_first_arg(line: &str, fn_name: &str) -> Option<String> {
     Some(after[start + 1..start + 1 + end].replace("&amp;", "&"))
 }
 
-fn resolve_url(path: &str, domain: &str) -> String {
+pub fn resolve_url(path: &str, domain: &str) -> String {
     if path.starts_with("http") {
         path.to_string()
     } else if path.starts_with('/') {
-        format!("https://myehalal.halal.gov.my{path}")
+        format!("https://www.halal.gov.my{path}")
     } else if path.starts_with('?') {
         format!("{domain}/index.php{path}")
     } else {
@@ -132,7 +162,7 @@ pub fn extract_table_data(html: &str) -> serde_json::Map<String, serde_json::Val
     parse_table_rows(html)
 }
 
-fn parse_table_rows(html: &str) -> serde_json::Map<String, serde_json::Value> {
+pub fn parse_table_rows(html: &str) -> serde_json::Map<String, serde_json::Value> {
     use serde_json::{Map, Value};
 
     let mut data = Map::new();
@@ -219,7 +249,7 @@ fn parse_table_rows(html: &str) -> serde_json::Map<String, serde_json::Value> {
     data
 }
 
-fn parse_table_array(html: &str) -> Vec<serde_json::Map<String, serde_json::Value>> {
+pub fn parse_table_array(html: &str) -> Vec<serde_json::Map<String, serde_json::Value>> {
     use serde_json::{Map, Value};
 
     let mut rows: Vec<Map<String, Value>> = Vec::new();
@@ -256,7 +286,7 @@ fn parse_table_array(html: &str) -> Vec<serde_json::Map<String, serde_json::Valu
     rows
 }
 
-fn strip_tags(s: &str) -> String {
+pub fn strip_tags(s: &str) -> String {
     let mut out = String::new();
     let mut in_tag = false;
     for c in s.chars() {
@@ -271,7 +301,7 @@ fn strip_tags(s: &str) -> String {
     out
 }
 
-fn slugify(s: &str) -> String {
+pub fn slugify(s: &str) -> String {
     s.to_lowercase()
         .chars()
         .map(|c| if c.is_alphanumeric() { c } else { '_' })
@@ -281,7 +311,3 @@ fn slugify(s: &str) -> String {
         .collect::<Vec<_>>()
         .join("_")
 }
-
-#[cfg(test)]
-#[path = "parser_tests.rs"]
-mod tests;

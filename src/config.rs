@@ -1,12 +1,11 @@
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
+use crate::constants::{DATA_PARAM, MAX_CONCURRENT};
 use crate::types::SubStrategy;
 
-pub const MAX_CONCURRENT: usize = 5;
-
 pub fn company_strategies() -> Vec<SubStrategy> {
-    let d = "ZGlyZWN0b3J5L2luZGV4X2RpcmVjdG9yeTs7Ozs=";
+    let d = DATA_PARAM;
 
     vec![
         SubStrategy {
@@ -76,7 +75,7 @@ pub fn company_strategies() -> Vec<SubStrategy> {
 }
 
 pub fn other_strategies() -> Vec<SubStrategy> {
-    let d = "ZGlyZWN0b3J5L2luZGV4X2RpcmVjdG9yeTs7Ozs=";
+    let d = DATA_PARAM;
 
     vec![
         SubStrategy {
@@ -148,7 +147,3 @@ pub fn other_strategies() -> Vec<SubStrategy> {
 pub fn semaphore() -> Arc<Semaphore> {
     Arc::new(Semaphore::new(MAX_CONCURRENT))
 }
-
-#[cfg(test)]
-#[path = "config_tests.rs"]
-mod tests;

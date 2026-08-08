@@ -21,7 +21,3 @@ pub fn pick_str(val: &Value, keys: &[&str]) -> String {
     }
     String::new()
 }
-
-#[cfg(test)]
-#[path = "types_tests.rs"]
-mod tests;

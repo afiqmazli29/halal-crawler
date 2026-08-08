@@ -32,7 +32,7 @@ pub(crate) async fn scrape_sub(
         );
 
         let t0 = Instant::now();
-        let html = http::scrape_with_retry(client, semaphore, &url1, 3).await?;
+        let html = http::scrape_get_retry(client, semaphore, &url1, 3).await?;
 
         if html.contains("Total Record") {
             let total_pages = parser::extract_total_pages(&html).min(max_pages);
@@ -82,7 +82,7 @@ async fn fetch_remaining(
 
         set.spawn(async move {
             let t = Instant::now();
-            let html = http::scrape_with_retry(&c, &s, &url, 3).await?;
+            let html = http::scrape_get_retry(&c, &s, &url, 3).await?;
             let r = parser::parse_table(&html, page);
             let n = r.len();
             d.fetch_add(1, Ordering::Relaxed);

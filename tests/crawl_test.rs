@@ -167,7 +167,7 @@ async fn test_scrape_companies_mocked() {
             ));
     });
 
-    let records = scraper::scrape_companies(&ctx.client, &ctx.semaphore, &base, &strategy)
+    let records = scraper::scrape_companies(&ctx.client, &ctx.semaphore, &strategy)
         .await
         .expect("scrape");
 
@@ -276,7 +276,7 @@ async fn test_scrape_companies_empty_listing_falls_back() {
             .body("<html><body>No onclick links here</body></html>");
     });
 
-    let records = scraper::scrape_companies(&ctx.client, &ctx.semaphore, &base, &strategy)
+    let records = scraper::scrape_companies(&ctx.client, &ctx.semaphore, &strategy)
         .await
         .expect("scrape");
 

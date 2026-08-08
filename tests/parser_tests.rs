@@ -1,186 +1,94 @@
-use super::*;
+use halal_crawler::parser::{
+    extract_first_arg, extract_onclick_urls, extract_table_data, parse_table, parse_table_array,
+    parse_table_rows, resolve_url, slugify, strip_tags,
+};
 use serde_json::Value;
 
-#[test]
-fn test_clean_html_replaces_br_and_strips_brackets() {
-    let input = "2026-12-31<br><span>Halal</span>";
-    assert_eq!(clean_html(input), "2026-12-31, spanHalal/span");
-}
-
-#[test]
-fn test_clean_html_multiple_br_tags() {
-    let input = "A<br>B<br>C";
-    assert_eq!(clean_html(input), "A, B, C");
-}
-
-#[test]
-fn test_clean_html_no_tags() {
-    let input = "plain text";
-    assert_eq!(clean_html(input), "plain text");
-}
-
-#[test]
-fn test_clean_html_strips_brackets_keeps_content() {
-    let input = "<div>content</div>";
-    assert_eq!(clean_html(input), "divcontent/div");
-}
-
-#[test]
-fn test_split_name_address_simple() {
-    let cell = "Syarikat ABC<br>123 Jalan Contoh<br>Kuala Lumpur";
-    let (name, addr) = split_name_address(cell);
-    assert_eq!(name, "Syarikat ABC");
-    assert_eq!(addr, "123 Jalan Contoh, Kuala Lumpur");
-}
-
-#[test]
-fn test_split_name_address_single_part() {
-    let cell = "Syarikat ABC";
-    let (name, addr) = split_name_address(cell);
-    assert_eq!(name, "Syarikat ABC");
-    assert_eq!(addr, "");
-}
-
-#[test]
-fn test_split_name_address_empty() {
-    let (name, addr) = split_name_address("");
-    assert_eq!(name, "");
-    assert_eq!(addr, "");
-}
-
-#[test]
-fn test_split_name_address_trims_whitespace() {
-    let cell = "  Syarikat ABC  <br>  123 Jalan  ";
-    let (name, addr) = split_name_address(cell);
-    assert_eq!(name, "Syarikat ABC");
-    assert_eq!(addr, "123 Jalan");
-}
+// ── extract_total_pages ────────────────────────────────────────
 
 #[test]
 fn test_extract_total_pages_standard_format() {
     let md = "Total Record : 12345 From 15";
-    assert_eq!(extract_total_pages(md), 15);
+    assert_eq!(halal_crawler::parser::extract_total_pages(md), 15);
 }
 
 #[test]
 fn test_extract_total_pages_multiline() {
     let md = "Header\nTotal Record 100 From 1\nFooter";
-    assert_eq!(extract_total_pages(md), 1);
+    assert_eq!(halal_crawler::parser::extract_total_pages(md), 1);
 }
 
 #[test]
 fn test_extract_total_pages_no_match() {
-    assert_eq!(extract_total_pages("no pages here"), 1);
+    assert_eq!(
+        halal_crawler::parser::extract_total_pages("no pages here"),
+        1
+    );
 }
 
 #[test]
 fn test_extract_total_pages_empty() {
-    assert_eq!(extract_total_pages(""), 1);
+    assert_eq!(halal_crawler::parser::extract_total_pages(""), 1);
 }
 
 #[test]
 fn test_extract_total_pages_digits_only_after_from() {
     let md = "Total Record : 12345 From 25";
-    assert_eq!(extract_total_pages(md), 25);
+    assert_eq!(halal_crawler::parser::extract_total_pages(md), 25);
 }
+
+// ── parse_table ────────────────────────────────────────────────
 
 #[test]
 fn test_parse_table_basic() {
-    let html = "<html><body><table>\n\
-        <tr>\n\
-        <td>Bil</td>\n\
-        <td>Name</td>\n\
-        <td>Expiry</td>\n\
-        </tr>\n\
-        <tr>\n\
-        <td>1</td>\n\
-        <td>Product A</td>\n\
-        <td>2026-12-31</td>\n\
-        </tr>\n\
-        <tr>\n\
-        <td>2</td>\n\
-        <td>Company B<br>123 Jalan</td>\n\
-        <td>2027-06-15<br><span>OK</span></td>\n\
-        </tr>\n\
-        </table></body></html>";
+    let html = "<html><body>\n\
+        <span class=\"company-name\">Syarikat ABC</span>\n\
+        <span class=\"company-address\">123 Jalan, 50000 KL, Selangor</span>\n\
+        <span class=\"company-name\">Syarikat XYZ</span>\n\
+        <span class=\"company-address\">456 Jalan, 47000 Shah Alam, Selangor</span>\n\
+        </body></html>";
 
-    let records = parse_table(html, 3);
+    let records = parse_table(html, 0);
     assert_eq!(records.len(), 2);
 
-    assert_eq!(records[0]["bil"], 1);
-    assert_eq!(records[0]["name"], "Product A");
-    assert_eq!(records[0]["expiry_date"], "2026-12-31");
-    assert_eq!(records[0]["page"], 3);
+    assert_eq!(records[0]["name"], "Syarikat ABC");
+    assert_eq!(records[0]["address"], "123 Jalan, 50000 KL, Selangor");
+    assert_eq!(records[0]["postcode"], "50000");
+    assert_eq!(records[0]["state"], "Selangor");
 
-    assert_eq!(records[1]["bil"], 2);
-    assert_eq!(records[1]["name"], "Company B");
-    assert_eq!(records[1]["address"], "123 Jalan");
-    assert_eq!(records[1]["expiry_date"], "2027-06-15, spanOK/span");
-    assert_eq!(records[1]["page"], 3);
-}
-
-#[test]
-fn test_parse_table_skips_header_row() {
-    let html = "<html><body><table>\n\
-        <tr>\n\
-        <td>Bil</td>\n\
-        <td>Name</td>\n\
-        <td>Expiry</td>\n\
-        </tr>\n\
-        <tr>\n\
-        <td>1</td>\n\
-        <td>Product A</td>\n\
-        <td>2026-12-31</td>\n\
-        </tr>\n\
-        </table></body></html>";
-
-    let records = parse_table(html, 1);
-    assert_eq!(records.len(), 1);
-}
-
-#[test]
-fn test_parse_table_skips_fewer_than_3_cells() {
-    let html = "<html><body><table>\n\
-        <tr>\n\
-        <td>1</td>\n\
-        <td>Product A</td>\n\
-        </tr>\n\
-        <tr>\n\
-        <td>2</td>\n\
-        <td>Product B</td>\n\
-        <td>2026-12-31</td>\n\
-        </tr>\n\
-        </table></body></html>";
-
-    let records = parse_table(html, 1);
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["bil"], 2);
+    assert_eq!(records[1]["name"], "Syarikat XYZ");
+    assert_eq!(records[1]["postcode"], "47000");
+    assert_eq!(records[1]["state"], "Selangor");
 }
 
 #[test]
 fn test_parse_table_empty() {
-    let records = parse_table("<table>\n</table>", 1);
+    let records = parse_table("<html>no spans</html>", 0);
     assert_eq!(records.len(), 0);
 }
 
 #[test]
-fn test_parse_table_bil_zero_skipped() {
-    let html = "<html><body><table>\n\
-        <tr>\n\
-        <td>0</td>\n\
-        <td>Bad</td>\n\
-        <td>Date</td>\n\
-        </tr>\n\
-        <tr>\n\
-        <td>1</td>\n\
-        <td>Good</td>\n\
-        <td>Date</td>\n\
-        </tr>\n\
-        </table></body></html>";
+fn test_parse_table_skips_empty_name() {
+    let html = "<html><body>\n\
+        <span class=\"company-name\"></span>\n\
+        <span class=\"company-address\">Some addr</span>\n\
+        <span class=\"company-name\">Valid Co</span>\n\
+        <span class=\"company-address\">456 Jalan, 51000 KL, Kuala Lumpur</span>\n\
+        </body></html>";
 
-    let records = parse_table(html, 1);
+    let records = parse_table(html, 0);
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["name"], "Good");
+    assert_eq!(records[0]["name"], "Valid Co");
+}
+
+#[test]
+fn test_parse_table_missing_address() {
+    let html = "<span class=\"company-name\">Only Name Co</span>";
+
+    let records = parse_table(html, 0);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["name"], "Only Name Co");
+    assert_eq!(records[0]["address"], "");
 }
 
 // ── strip_tags ────────────────────────────────────────────────
@@ -284,7 +192,7 @@ fn test_resolve_url_absolute_root() {
     let path = "/portal-halal/v1/index.php";
     assert_eq!(
         resolve_url(path, "https://domain.com"),
-        "https://myehalal.halal.gov.my/portal-halal/v1/index.php"
+        "https://www.halal.gov.my/portal-halal/v1/index.php"
     );
 }
 
@@ -292,8 +200,8 @@ fn test_resolve_url_absolute_root() {
 fn test_resolve_url_query_only() {
     let path = "?data=xyz&category=BG&page=2";
     assert_eq!(
-        resolve_url(path, "https://myehalal.halal.gov.my/portal-halal/v1"),
-        "https://myehalal.halal.gov.my/portal-halal/v1/index.php?data=xyz&category=BG&page=2"
+        resolve_url(path, "https://www.halal.gov.my"),
+        "https://www.halal.gov.my/index.php?data=xyz&category=BG&page=2"
     );
 }
 
@@ -301,8 +209,8 @@ fn test_resolve_url_query_only() {
 fn test_resolve_url_relative() {
     let path = "detail.php?id=1";
     assert_eq!(
-        resolve_url(path, "https://myehalal.halal.gov.my/portal-halal/v1"),
-        "https://myehalal.halal.gov.my/portal-halal/v1/detail.php?id=1"
+        resolve_url(path, "https://www.halal.gov.my"),
+        "https://www.halal.gov.my/detail.php?id=1"
     );
 }
 
@@ -351,7 +259,6 @@ fn test_extract_onclick_urls_empty_html() {
 
 #[test]
 fn test_extract_onclick_urls_multiple_do_detail_per_line() {
-    // One do_detail and one location.href on different lines
     let html = "\
         do_detail('a.php')\n\
         location.href='b.php'\
