@@ -37,5 +37,5 @@ One category's full sweep — all letters, all pages — producing records.
 _Avoid_: scrape run, job
 
 **hdnCounter**:
-The portal's hidden form field that drives company-listing pagination; subcategory listings instead advance on the page parameter with the total page count from page one.
+A hidden form field the portal echoes back as a record-count display; pagination is driven by the page parameter alone, with the total page count announced on page one (`Total Record : … From N`).
 _Avoid_: cursor, offset

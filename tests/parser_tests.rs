@@ -1,6 +1,4 @@
-use halal_crawler::parser::{
-    extract_counter, extract_total_pages, parse_product_table, parse_table,
-};
+use halal_crawler::parser::{extract_total_pages, parse_product_table, parse_table};
 
 // ── extract_total_pages ────────────────────────────────────────
 
@@ -31,32 +29,6 @@ fn test_extract_total_pages_no_match() {
 #[test]
 fn test_extract_total_pages_empty() {
     assert_eq!(extract_total_pages(""), 1);
-}
-
-// ── extract_counter ────────────────────────────────────────────
-
-#[test]
-fn test_extract_counter_unquoted() {
-    // Live portal renders value=21 without quotes.
-    let html = "<input type=\"hidden\" name=\"hdnCounter\" value=21>";
-    assert_eq!(extract_counter(html), 21);
-}
-
-#[test]
-fn test_extract_counter_quoted() {
-    let html = "<input type=\"hidden\" name=\"hdnCounter\" value=\"41\">";
-    assert_eq!(extract_counter(html), 41);
-}
-
-#[test]
-fn test_extract_counter_zero() {
-    let html = "<input type=\"hidden\" name=\"hdnCounter\" value=0>";
-    assert_eq!(extract_counter(html), 0);
-}
-
-#[test]
-fn test_extract_counter_missing() {
-    assert_eq!(extract_counter("<html>no counter</html>"), 0);
 }
 
 // ── parse_table ────────────────────────────────────────────────

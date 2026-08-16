@@ -62,9 +62,9 @@ pub async fn cleanup(pool: &PgPool, company_names: &[&str], product_names: &[&st
     }
 }
 
-/// A directory search response: span-based listing plus the hdnCounter
-/// hidden input, as the live portal renders it (value may be unquoted).
-pub fn listing_html(records: &[(&str, &str)], counter: u32) -> String {
+/// A directory search response: span-based listing plus the portal's
+/// "Total Record … From N" line that announces the total page count.
+pub fn listing_html(records: &[(&str, &str)], total_pages: u32) -> String {
     let mut spans = String::new();
     for (name, address) in records {
         spans.push_str(&format!(
@@ -72,9 +72,8 @@ pub fn listing_html(records: &[(&str, &str)], counter: u32) -> String {
              <span class=\"company-address\">{address}</span>\n"
         ));
     }
-    format!(
-        "<html><body>\n{spans}<input type=\"hidden\" name=\"hdnCounter\" value={counter}>\n</body></html>"
-    )
+    let total_pages_line = format!("Total Record : 955 - Page 1 From {total_pages}");
+    format!("<html><body>\n{total_pages_line}\n{spans}</body></html>")
 }
 
 /// A product/premise listing page in the portal's table-row shape:

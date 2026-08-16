@@ -22,8 +22,8 @@ Requires a running PostgreSQL instance (default: `postgres://postgres:postgres@l
 
 - `main.rs` — entrypoint. Seeds the portal session, crawls company categories and subcategory listings, inserts, prints sample DB rows.
 - `portal.rs` — the Portal seam: base URL, session, semaphore, POST search, GET/retry. Tests substitute an httpmock server via `Portal::new(base_url)`.
-- `listing.rs` — the listing fetcher: `fetch_companies` (hdnCounter pagination, name dedup) and `fetch_subcategory` (page-param pagination). Hides the crawl protocols.
-- `parser.rs` — HTML extractors: `parse_table` (company spans), `parse_product_table` (product rows), `extract_counter`, `extract_total_pages`.
+- `listing.rs` — the listing fetcher: `fetch_companies` (page-param pagination, name dedup) and `fetch_subcategory` (same crawl, product rows). Hides the crawl protocols.
+- `parser.rs` — HTML extractors: `parse_table` (company spans), `parse_product_table` (product rows), `extract_total_pages`.
 - `records.rs` — typed `Company`/`Product` with `from_value` adapters owning the portal's Malay+English key variants.
 - `db.rs` — PostgreSQL init + upserts + `sample_companies`. Schema is created/migrated via `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
 - `config.rs` — category strategy lists (`company_strategies`, `other_strategies`).
@@ -31,7 +31,7 @@ Requires a running PostgreSQL instance (default: `postgres://postgres:postgres@l
 
 ## Portal protocol notes
 
-The live portal is reachable without auth: GET `index.php` to seed a PHP session, then POST `index.php?data=DATA_PARAM&negeri=&category=C&page=N&cari=L` with form `hdnCounter`, `t`, `a`, `ty` (the subcategory code). Company listings (`ty=CO`) echo a new `hdnCounter` per page (unquoted `value=21`); subcategory listings ignore the counter and advance on `page`, with total pages in a `Total Record : … From N` line. Listing rows are spans (`company-name`, `company-brand`, `company-address`) plus an expiry cell; product brands are prefixed `JENAMA:`.
+The live portal is reachable without auth: GET `index.php` to seed a PHP session, then POST `index.php?data=DATA_PARAM&negeri=&category=C&page=N&cari=L` with form `hdnCounter`, `t`, `a`, `ty` (the subcategory code). Pagination is driven by the `page` parameter alone — the `hdnCounter` echo is only a record-count display, and page one announces the total page count in a `Total Record : … From N` line. Listing rows are spans (`company-name`, `company-brand`, `company-address`) plus an expiry cell; product brands are prefixed `JENAMA:`.
 
 ## Adding new JSON fields
 

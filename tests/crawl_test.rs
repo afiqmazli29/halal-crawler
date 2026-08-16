@@ -161,7 +161,7 @@ async fn test_scrape_companies_dedups_across_letters() {
             ("t5_ABC Sdn Bhd", "123 Jalan, 50000 KL, Selangor"),
             ("t5_XYZ Sdn Bhd", "456 Jalan, 47000 Shah Alam, Selangor"),
         ],
-        0,
+        1,
     );
     ctx.server.mock(|when, then| {
         when.method(POST).path("/index.php");
@@ -181,10 +181,10 @@ async fn test_scrape_companies_dedups_across_letters() {
 }
 
 #[tokio::test]
-async fn test_scrape_companies_paginates_via_counter() {
+async fn test_scrape_companies_paginates_via_page_param() {
     let ctx = common::setup_mock().await;
 
-    // Page 1 returns counter=41, page 2 returns counter=0 (end).
+    // Page 1 announces 2 total pages; page 2 is fetched next.
     ctx.server.mock(|when, then| {
         when.method(POST)
             .path("/index.php")
@@ -194,7 +194,7 @@ async fn test_scrape_companies_paginates_via_counter() {
             .header("content-type", "text/html")
             .body(common::listing_html(
                 &[("t6_Alpha One", "1 Jalan, 50000 KL, Kuala Lumpur")],
-                41,
+                2,
             ));
     });
     ctx.server.mock(|when, then| {
@@ -206,7 +206,7 @@ async fn test_scrape_companies_paginates_via_counter() {
             .header("content-type", "text/html")
             .body(common::listing_html(
                 &[("t6_Alpha Two", "2 Jalan, 47000 Shah Alam, Selangor")],
-                0,
+                2,
             ));
     });
     ctx.server.mock(|when, then| {
@@ -230,7 +230,7 @@ async fn test_scrape_companies_paginates_via_counter() {
 async fn test_scrape_companies_parses_address_fields() {
     let ctx = common::setup_mock().await;
 
-    let html = common::listing_html(&[("t7_Addr Co", "12 Jalan, 63000 Cyberjaya, Selangor")], 0);
+    let html = common::listing_html(&[("t7_Addr Co", "12 Jalan, 63000 Cyberjaya, Selangor")], 1);
     ctx.server.mock(|when, then| {
         when.method(POST).path("/index.php");
         then.status(200)

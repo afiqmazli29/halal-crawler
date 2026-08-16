@@ -7,66 +7,48 @@ use crate::records::{Company, Product};
 use crate::types::{Error, SubStrategy, error_chain};
 
 /// The directory listing as one deep module: both crawl modes live here,
-/// hiding the pagination protocol, concurrency, page caps, and dedup
-/// behind two small functions. Callers hand over a strategy and get
-/// records — they never learn about hdnCounter or Total Record lines.
+/// hiding the pagination protocol, concurrency, and dedup behind two
+/// small functions. Callers hand over a strategy and get records — they
+/// never learn about Total Record lines or the page parameter.
 
-/// Crawl a category's companies: each letter a–z is searched, pages
-/// advance via the hdnCounter echoed back by the portal, and records
-/// are deduped by name. A failing letter is logged and skipped — it
-/// never aborts the rest of the category.
+/// Crawl a category's companies: each letter a–z is searched, page 1
+/// announces the total page count, and the remaining pages are fetched
+/// concurrently. Records are deduped by name. A failing letter is
+/// logged and skipped — it never aborts the rest of the category.
 pub async fn fetch_companies(
     portal: &Portal,
     strategy: &SubStrategy,
 ) -> Result<Vec<Company>, Error> {
-    let mut set = JoinSet::new();
-    let category = strategy.category_code.to_string();
-    let ty = strategy.sub_code;
+    let records = crawl(portal, strategy, parser::parse_table).await?;
 
-    for letter in 'a'..='z' {
-        let portal = Portal::clone(portal);
-        let category = category.clone();
-        set.spawn(async move {
-            letter_crawl(portal, category, ty, letter)
-                .await
-                .map_err(|e| format!("[{letter}] {}", error_chain(&e)))
-        });
-    }
-
-    let mut all = Vec::new();
     let mut seen = HashSet::new();
+    let deduped = records
+        .into_iter()
+        .filter(|r| !r.name.is_empty() && seen.insert(r.name.clone()))
+        .collect();
 
-    while let Some(result) = set.join_next().await {
-        match result {
-            Ok(Ok((letter, records))) => {
-                let letter_count = records.len();
-                for r in records {
-                    let name = r.name.clone();
-                    if name.is_empty() || !seen.insert(name) {
-                        continue;
-                    }
-                    all.push(r);
-                }
-                println!(
-                    "│    [{letter}] total {letter_count} (unique so far: {})",
-                    all.len()
-                );
-            }
-            Ok(Err(e)) => eprintln!("│    ✗ {e}"),
-            Err(join) => eprintln!("│    ✗ letter task failed: {join}"),
-        }
-    }
-
-    Ok(all)
+    Ok(deduped)
 }
 
-/// Crawl a subcategory listing (products, premises, …): each letter
-/// announces its total page count on page 1, then the remaining pages
-/// are fetched concurrently. No dedup — records may share names.
+/// Crawl a subcategory listing (products, premises, …) — same crawl,
+/// product rows, no dedup (records may share names).
 pub async fn fetch_subcategory(
     portal: &Portal,
     strategy: &SubStrategy,
 ) -> Result<Vec<Product>, Error> {
+    crawl(portal, strategy, parser::parse_product_table).await
+}
+
+/// The shared crawl: one task per letter, each letter paginating from
+/// page 1 to the total announced by the portal on page 1.
+async fn crawl<T>(
+    portal: &Portal,
+    strategy: &SubStrategy,
+    parse: fn(&str) -> Vec<T>,
+) -> Result<Vec<T>, Error>
+where
+    T: Send + 'static,
+{
     let mut set = JoinSet::new();
     let category = strategy.category_code.to_string();
     let ty = strategy.sub_code;
@@ -75,7 +57,7 @@ pub async fn fetch_subcategory(
         let portal = Portal::clone(portal);
         let category = category.clone();
         set.spawn(async move {
-            letter_sub_crawl(portal, category, ty, letter)
+            letter_crawl(portal, category, ty, letter, parse)
                 .await
                 .map_err(|e| format!("[{letter}] {}", error_chain(&e)))
         });
@@ -100,58 +82,25 @@ pub async fn fetch_subcategory(
     Ok(all)
 }
 
-/// One letter of a company crawl: POST pages, advancing the hdnCounter
-/// each time until the portal echoes 0 or the counter stops growing.
-async fn letter_crawl(
+/// One letter: page 1 announces the total page count, the rest are
+/// fetched concurrently. The portal ignores hdnCounter here — the page
+/// parameter alone advances the listing.
+async fn letter_crawl<T>(
     portal: Portal,
     category: String,
     ty: &'static str,
     letter: char,
-) -> Result<(char, Vec<Company>), Error> {
-    let mut records = Vec::new();
-    let mut page = 1u32;
-    let mut counter = String::new();
-
-    loop {
-        let html = portal.search(&category, ty, letter, page, &counter).await?;
-
-        let page_records = parser::parse_table(&html);
-        if page_records.is_empty() {
-            break;
-        }
-
-        let new_on_page = page_records.len();
-        records.extend(page_records);
-
-        println!("│    [{letter}] page {page}: {new_on_page} records");
-
-        let prev: u32 = counter.parse().unwrap_or(0);
-        let next = parser::extract_counter(&html);
-        if next == 0 || (prev > 0 && next >= prev) || page > 100 {
-            break;
-        }
-        counter = next.to_string();
-        page += 1;
-    }
-
-    Ok((letter, records))
-}
-
-/// One letter of a subcategory crawl: page 1 announces the total page
-/// count, the rest are fetched concurrently (the portal ignores the
-/// counter here and advances on the page parameter alone).
-async fn letter_sub_crawl(
-    portal: Portal,
-    category: String,
-    ty: &'static str,
-    letter: char,
-) -> Result<(char, Vec<Product>), Error> {
+    parse: fn(&str) -> Vec<T>,
+) -> Result<(char, Vec<T>), Error>
+where
+    T: Send + 'static,
+{
     let html = portal.search(&category, ty, letter, 1, "0").await?;
     let total_pages = parser::extract_total_pages(&html);
-    let page1_count = parser::parse_product_table(&html).len();
+    let page1_count = parse(&html).len();
     println!("│    [{letter}] page 1/{total_pages} ✓  {page1_count} records");
 
-    let mut records = parser::parse_product_table(&html);
+    let mut records = parse(&html);
     if total_pages > 1 {
         let mut set = JoinSet::new();
         for page in 2..=total_pages {
@@ -159,7 +108,7 @@ async fn letter_sub_crawl(
             let category = category.clone();
             set.spawn(async move {
                 let html = portal.search(&category, ty, letter, page, "0").await?;
-                let r = parser::parse_product_table(&html);
+                let r = parse(&html);
                 let n = r.len();
                 println!("│    [{letter}] page {page}/{total_pages} ✓  {n} records");
                 Ok::<_, Error>(r)

@@ -96,26 +96,6 @@ pub fn parse_product_table(html: &str) -> Vec<Product> {
     records
 }
 
-/// Extract the hdnCounter value from the response HTML for pagination.
-pub fn extract_counter(html: &str) -> u32 {
-    // The portal emits both value=21 and value="41", so accept both.
-    for line in html.lines() {
-        if let Some(pos) = line.find("hdnCounter") {
-            let after = &line[pos..];
-            let Some(v_pos) = after.find("value=") else {
-                continue;
-            };
-            let v = &after[v_pos + "value=".len()..];
-            let v = v.trim_start().trim_start_matches('"');
-            let digits: String = v.chars().take_while(|c| c.is_ascii_digit()).collect();
-            if let Ok(n) = digits.parse::<u32>() {
-                return n;
-            }
-        }
-    }
-    0
-}
-
 /// Extract the total-page count from a "Total Record … From N" line.
 pub fn extract_total_pages(md: &str) -> u32 {
     md.lines()
