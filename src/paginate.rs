@@ -34,13 +34,13 @@ pub(crate) async fn scrape_sub(
 
         if html.contains("Total Record") {
             let total_pages = parser::extract_total_pages(&html).min(max_pages);
-            let page1_count = parser::parse_table(&html, 1).len();
+            let page1_count = parser::parse_table(&html).len();
             println!(
                 "│    page 1/{total_pages} ✓  {page1_count} records  {:.1}s",
                 t0.elapsed().as_secs_f32()
             );
 
-            let mut records = parser::parse_table(&html, 1);
+            let mut records = parser::parse_table(&html);
             if total_pages > 1 {
                 records
                     .extend(fetch_remaining(portal, base_url, strategy, &sp, total_pages).await?);
@@ -78,7 +78,7 @@ async fn fetch_remaining(
         set.spawn(async move {
             let t = Instant::now();
             let html = portal.get_retry(&url, 3).await?;
-            let r = parser::parse_table(&html, page);
+            let r = parser::parse_table(&html);
             let n = r.len();
             d.fetch_add(1, Ordering::Relaxed);
             println!(

@@ -24,7 +24,7 @@ pub async fn scrape_companies(
             loop {
                 let html = portal.search(&cat, ty, letter, page, &counter).await?;
 
-                let page_records = parser::parse_table(&html, 0);
+                let page_records = parser::parse_table(&html);
                 if page_records.is_empty() {
                     break;
                 }
