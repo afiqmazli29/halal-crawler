@@ -4,7 +4,7 @@ use tokio::task::JoinSet;
 use crate::parser;
 use crate::portal::Portal;
 use crate::records::{Company, Product};
-use crate::types::{Error, SubStrategy};
+use crate::types::{Error, SubStrategy, error_chain};
 
 /// The directory listing as one deep module: both crawl modes live here,
 /// hiding the pagination protocol, concurrency, page caps, and dedup
@@ -13,7 +13,8 @@ use crate::types::{Error, SubStrategy};
 
 /// Crawl a category's companies: each letter a–z is searched, pages
 /// advance via the hdnCounter echoed back by the portal, and records
-/// are deduped by name.
+/// are deduped by name. A failing letter is logged and skipped — it
+/// never aborts the rest of the category.
 pub async fn fetch_companies(
     portal: &Portal,
     strategy: &SubStrategy,
@@ -25,26 +26,35 @@ pub async fn fetch_companies(
     for letter in 'a'..='z' {
         let portal = Portal::clone(portal);
         let category = category.clone();
-        set.spawn(letter_crawl(portal, category, ty, letter));
+        set.spawn(async move {
+            letter_crawl(portal, category, ty, letter)
+                .await
+                .map_err(|e| format!("[{letter}] {}", error_chain(&e)))
+        });
     }
 
     let mut all = Vec::new();
     let mut seen = HashSet::new();
 
     while let Some(result) = set.join_next().await {
-        let (letter, records) = result??;
-        let letter_count = records.len();
-        for r in records {
-            let name = r.name.clone();
-            if name.is_empty() || !seen.insert(name) {
-                continue;
+        match result {
+            Ok(Ok((letter, records))) => {
+                let letter_count = records.len();
+                for r in records {
+                    let name = r.name.clone();
+                    if name.is_empty() || !seen.insert(name) {
+                        continue;
+                    }
+                    all.push(r);
+                }
+                println!(
+                    "│    [{letter}] total {letter_count} (unique so far: {})",
+                    all.len()
+                );
             }
-            all.push(r);
+            Ok(Err(e)) => eprintln!("│    ✗ {e}"),
+            Err(join) => eprintln!("│    ✗ letter task failed: {join}"),
         }
-        println!(
-            "│    [{letter}] total {letter_count} (unique so far: {})",
-            all.len()
-        );
     }
 
     Ok(all)
@@ -64,18 +74,27 @@ pub async fn fetch_subcategory(
     for letter in 'a'..='z' {
         let portal = Portal::clone(portal);
         let category = category.clone();
-        set.spawn(letter_sub_crawl(portal, category, ty, letter));
+        set.spawn(async move {
+            letter_sub_crawl(portal, category, ty, letter)
+                .await
+                .map_err(|e| format!("[{letter}] {}", error_chain(&e)))
+        });
     }
 
     let mut all = Vec::new();
     while let Some(result) = set.join_next().await {
-        let (letter, records) = result??;
-        let letter_count = records.len();
-        all.extend(records);
-        println!(
-            "│    [{letter}] total {letter_count} (overall so far: {})",
-            all.len()
-        );
+        match result {
+            Ok(Ok((letter, records))) => {
+                let letter_count = records.len();
+                all.extend(records);
+                println!(
+                    "│    [{letter}] total {letter_count} (overall so far: {})",
+                    all.len()
+                );
+            }
+            Ok(Err(e)) => eprintln!("│    ✗ {e}"),
+            Err(join) => eprintln!("│    ✗ letter task failed: {join}"),
+        }
     }
 
     Ok(all)
@@ -147,9 +166,10 @@ async fn letter_sub_crawl(
             });
         }
         while let Some(result) = set.join_next().await {
-            match result? {
-                Ok(mut r) => records.append(&mut r),
-                Err(e) => eprintln!("│    ✗ {e}"),
+            match result {
+                Ok(Ok(mut r)) => records.append(&mut r),
+                Ok(Err(e)) => eprintln!("│    [{letter}] ✗ {}", error_chain(&e)),
+                Err(join) => eprintln!("│    [{letter}] ✗ page task failed: {join}"),
             }
         }
     }

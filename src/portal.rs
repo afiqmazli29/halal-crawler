@@ -68,6 +68,8 @@ impl Portal {
 
     /// POST the directory search: a (category, ty) pair, letter filter,
     /// page number, and the hdnCounter returned by the previous response.
+    /// Retries transport errors with backoff — the portal drops
+    /// connections when several searches run at once.
     pub async fn search(
         &self,
         category: &str,
@@ -76,24 +78,39 @@ impl Portal {
         page: u32,
         counter: &str,
     ) -> Result<String, Error> {
-        let _permit = self.semaphore.acquire().await?;
+        const MAX_ATTEMPTS: u32 = 3;
+        let mut last_err: Option<Error> = None;
 
-        let url = format!(
-            "{}/index.php?data={DATA_PARAM}&negeri=&category={category}&page={page}&cari={letter}",
-            self.base
-        );
+        for attempt in 1..=MAX_ATTEMPTS {
+            let _permit = self.semaphore.acquire().await?;
 
-        let resp = self
-            .client
-            .post(&url)
-            .header(REFERER, format!("{}/index.php", self.base))
-            .header(ORIGIN, HeaderValue::from_str(&self.base)?)
-            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .form(&[("hdnCounter", counter), ("t", ""), ("a", ""), ("ty", ty)])
-            .send()
-            .await?;
+            let url = format!(
+                "{}/index.php?data={DATA_PARAM}&negeri=&category={category}&page={page}&cari={letter}",
+                self.base
+            );
 
-        Ok(resp.text().await?)
+            let resp = self
+                .client
+                .post(&url)
+                .header(REFERER, format!("{}/index.php", self.base))
+                .header(ORIGIN, HeaderValue::from_str(&self.base)?)
+                .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .form(&[("hdnCounter", counter), ("t", ""), ("a", ""), ("ty", ty)])
+                .send()
+                .await;
+
+            match resp {
+                Ok(resp) => return Ok(resp.text().await?),
+                Err(e) => {
+                    last_err = Some(e.into());
+                    if attempt < MAX_ATTEMPTS {
+                        tokio::time::sleep(Duration::from_secs(2u64.pow(attempt - 1))).await;
+                    }
+                }
+            }
+        }
+
+        Err(last_err.expect("loop runs at least once"))
     }
 
     /// Semaphore-guarded GET.

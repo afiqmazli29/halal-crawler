@@ -41,7 +41,7 @@ async fn main() -> Result<(), Error> {
                 total_companies += n;
                 println!("└─ {n} companies → DB");
             }
-            Err(e) => eprintln!("└─ ✗ {e}"),
+            Err(e) => eprintln!("└─ ✗ {}", types::error_chain(&e)),
         }
     }
 
@@ -65,7 +65,7 @@ async fn main() -> Result<(), Error> {
                 total_products += n;
                 println!("└─ {n} products → DB");
             }
-            Err(e) => eprintln!("└─ ✗ {e}"),
+            Err(e) => eprintln!("└─ ✗ {}", types::error_chain(&e)),
         }
     }
 
