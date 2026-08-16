@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use halal_crawler::{config, db, portal, scraper, types};
+use halal_crawler::{config, db, listing, portal, types};
 use types::Error;
 
 #[tokio::main]
@@ -35,7 +35,7 @@ async fn main() -> Result<(), Error> {
             s.category_code
         );
 
-        match scraper::scrape_companies(&portal, s).await {
+        match listing::fetch_companies(&portal, s).await {
             Ok(records) => {
                 let n = db::insert_companies(&pool, &records, s.category_code).await?;
                 total_companies += n;

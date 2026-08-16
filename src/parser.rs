@@ -45,6 +45,57 @@ pub fn parse_table(html: &str) -> Vec<serde_json::Value> {
     records
 }
 
+/// Parse a subcategory (product/premise) results page: each table row
+/// holds a name span, an optional JENAMA brand span, the certificate
+/// holder, and an expiry date cell.
+pub fn parse_product_table(html: &str) -> Vec<serde_json::Value> {
+    let document = Html::parse_document(html);
+
+    let row_sel = Selector::parse("tr").unwrap();
+    let name_sel = Selector::parse("span.company-name").unwrap();
+    let brand_sel = Selector::parse("span.company-brand").unwrap();
+    let addr_sel = Selector::parse("span.company-address").unwrap();
+    let expiry_sel = Selector::parse("td.text-center:not(.font-semibold)").unwrap();
+
+    let mut records = Vec::new();
+
+    for row in document.select(&row_sel) {
+        let Some(name_el) = row.select(&name_sel).next() else {
+            continue;
+        };
+        let name = name_el.text().collect::<String>().trim().to_string();
+        if name.is_empty() {
+            continue;
+        }
+
+        let brand = row
+            .select(&brand_sel)
+            .next()
+            .map(|el| el.text().collect::<String>())
+            .map(|s| s.replace("JENAMA:", "").trim().to_string())
+            .unwrap_or_default();
+        let company = row
+            .select(&addr_sel)
+            .next()
+            .map(|el| el.text().collect::<String>().trim().to_string())
+            .unwrap_or_default();
+        let expiry = row
+            .select(&expiry_sel)
+            .next()
+            .map(|el| el.text().collect::<String>().trim().to_string())
+            .unwrap_or_default();
+
+        records.push(json!({
+            "name": name,
+            "brand": brand,
+            "company": company,
+            "expiry_date": expiry,
+        }));
+    }
+
+    records
+}
+
 /// Extract the hdnCounter value from the response HTML for pagination.
 pub fn extract_counter(html: &str) -> u32 {
     // The portal emits both value=21 and value="41", so accept both.

@@ -1,4 +1,6 @@
-use halal_crawler::parser::{extract_counter, extract_total_pages, parse_table};
+use halal_crawler::parser::{
+    extract_counter, extract_total_pages, parse_product_table, parse_table,
+};
 
 // ── extract_total_pages ────────────────────────────────────────
 
@@ -117,4 +119,54 @@ fn test_parse_table_no_postcode_or_state() {
     let records = parse_table(html);
     assert_eq!(records[0]["postcode"], "");
     assert_eq!(records[0]["state"], "");
+}
+
+// ── parse_product_table ────────────────────────────────────────
+
+#[test]
+fn test_parse_product_table_row() {
+    let html = "<html><body><table>\n\
+        <tr>\n\
+        <td class=\"text-center font-semibold\">1.</td>\n\
+        <td>\n\
+        <span class=\"company-name\">Biskut Coklat</span>\n\
+        <span class=\"company-brand\"><br><b>JENAMA:</b>Orang Kaya<br></span>\n\
+        <span class=\"company-address\"><i>Syarikat Contoh Sdn Bhd</i></span>\n\
+        </td>\n\
+        <td class=\"text-center\">31/05/2028</td>\n\
+        </tr>\n\
+        </table></body></html>";
+
+    let records = parse_product_table(html);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["name"], "Biskut Coklat");
+    assert_eq!(records[0]["brand"], "Orang Kaya");
+    assert_eq!(records[0]["company"], "Syarikat Contoh Sdn Bhd");
+    assert_eq!(records[0]["expiry_date"], "31/05/2028");
+}
+
+#[test]
+fn test_parse_product_table_empty_brand() {
+    let html = "<table>\n\
+        <tr>\n\
+        <td class=\"text-center font-semibold\">1.</td>\n\
+        <td>\n\
+        <span class=\"company-name\">Tanpa Jenama</span>\n\
+        <span class=\"company-brand\"></span>\n\
+        <span class=\"company-address\"><i>Co</i></span>\n\
+        </td>\n\
+        <td class=\"text-center\"></td>\n\
+        </tr>\n\
+        </table>";
+
+    let records = parse_product_table(html);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["name"], "Tanpa Jenama");
+    assert_eq!(records[0]["brand"], "");
+    assert_eq!(records[0]["expiry_date"], "");
+}
+
+#[test]
+fn test_parse_product_table_no_rows() {
+    assert_eq!(parse_product_table("<table></table>").len(), 0);
 }

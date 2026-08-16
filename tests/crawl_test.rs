@@ -1,7 +1,7 @@
 use httpmock::prelude::*;
 use serde_json::json;
 
-use halal_crawler::{db, scraper, types};
+use halal_crawler::{db, listing, types};
 
 mod common;
 
@@ -159,7 +159,7 @@ async fn test_scrape_companies_dedups_across_letters() {
             .body(html);
     });
 
-    let records = scraper::scrape_companies(&ctx.portal, &company_strategy())
+    let records = listing::fetch_companies(&ctx.portal, &company_strategy())
         .await
         .expect("scrape");
 
@@ -208,7 +208,7 @@ async fn test_scrape_companies_paginates_via_counter() {
             .body("<html><body>empty</body></html>");
     });
 
-    let records = scraper::scrape_companies(&ctx.portal, &company_strategy())
+    let records = listing::fetch_companies(&ctx.portal, &company_strategy())
         .await
         .expect("scrape");
 
@@ -233,7 +233,7 @@ async fn test_scrape_companies_parses_address_fields() {
             .body(html);
     });
 
-    let records = scraper::scrape_companies(&ctx.portal, &company_strategy())
+    let records = listing::fetch_companies(&ctx.portal, &company_strategy())
         .await
         .expect("scrape");
 
@@ -243,43 +243,105 @@ async fn test_scrape_companies_parses_address_fields() {
 }
 
 #[tokio::test]
-async fn test_scrape_products_mocked() {
+async fn test_fetch_subcategory_mocked() {
     let ctx = common::setup_mock().await;
 
     let page1 = common::product_listing_html(
         &[
-            ("t6_Biskut A", "Alamat A", "2026-12-31"),
-            ("t6_Biskut B", "Alamat B", "2027-06-15"),
+            ("t6_Biskut A", "BrandA", "t6_Parent Co", "2026-12-31"),
+            ("t6_Biskut B", "BrandB", "t6_Parent Co", "2027-06-15"),
         ],
         1,
     );
 
     ctx.server.mock(|when, then| {
-        when.method(GET)
+        when.method(POST)
             .path("/index.php")
             .query_param("category", "PR")
-            .query_param("subcategory", "PR");
+            .query_param("cari", "a")
+            .query_param("page", "1");
         then.status(200)
             .header("content-type", "text/html")
             .body(page1);
     });
+    ctx.server.mock(|when, then| {
+        when.method(POST).path("/index.php");
+        then.status(200)
+            .header("content-type", "text/html")
+            .body("<html><body>empty</body></html>");
+    });
 
-    let records = scraper::scrape_products(&ctx.portal, &product_strategy())
+    let records = listing::fetch_subcategory(&ctx.portal, &product_strategy())
         .await
         .expect("scrape");
-
-    assert_eq!(records.len(), 2);
 
     let names: Vec<&str> = records
         .iter()
         .map(|r| r["name"].as_str().unwrap_or(""))
         .collect();
-    assert!(names.contains(&"t6_Biskut A"));
-    assert!(names.contains(&"t6_Biskut B"));
+    assert!(names.contains(&"t6_Biskut A"), "got: {names:?}");
+    assert!(names.contains(&"t6_Biskut B"), "got: {names:?}");
+    assert_eq!(records.len(), 2);
+
+    let biscuit_a = records
+        .iter()
+        .find(|r| r["name"] == "t6_Biskut A")
+        .expect("record");
+    assert_eq!(biscuit_a["brand"], "BrandA");
+    assert_eq!(biscuit_a["company"], "t6_Parent Co");
+    assert_eq!(biscuit_a["expiry_date"], "2026-12-31");
 }
 
 #[tokio::test]
-async fn test_scrape_companies_empty_listing_returns_empty() {
+async fn test_fetch_subcategory_paginates_via_page_param() {
+    let ctx = common::setup_mock().await;
+
+    ctx.server.mock(|when, then| {
+        when.method(POST)
+            .path("/index.php")
+            .query_param("cari", "a")
+            .query_param("page", "1");
+        then.status(200)
+            .header("content-type", "text/html")
+            .body(common::product_listing_html(
+                &[("t6_Page One", "BrandX", "Co X", "2028-01-01")],
+                2,
+            ));
+    });
+    ctx.server.mock(|when, then| {
+        when.method(POST)
+            .path("/index.php")
+            .query_param("cari", "a")
+            .query_param("page", "2");
+        then.status(200)
+            .header("content-type", "text/html")
+            .body(common::product_listing_html(
+                &[("t6_Page Two", "BrandY", "Co Y", "2028-02-02")],
+                2,
+            ));
+    });
+    ctx.server.mock(|when, then| {
+        when.method(POST).path("/index.php");
+        then.status(200)
+            .header("content-type", "text/html")
+            .body("<html><body>empty</body></html>");
+    });
+
+    let records = listing::fetch_subcategory(&ctx.portal, &product_strategy())
+        .await
+        .expect("scrape");
+
+    let names: Vec<&str> = records
+        .iter()
+        .map(|r| r["name"].as_str().unwrap_or(""))
+        .collect();
+    assert!(names.contains(&"t6_Page One"), "got: {names:?}");
+    assert!(names.contains(&"t6_Page Two"), "got: {names:?}");
+    assert_eq!(records.len(), 2);
+}
+
+#[tokio::test]
+async fn test_fetch_companies_empty_listing_returns_empty() {
     let ctx = common::setup_mock().await;
 
     ctx.server.mock(|when, then| {
@@ -289,7 +351,7 @@ async fn test_scrape_companies_empty_listing_returns_empty() {
             .body("<html><body>No spans here</body></html>");
     });
 
-    let records = scraper::scrape_companies(&ctx.portal, &company_strategy())
+    let records = listing::fetch_companies(&ctx.portal, &company_strategy())
         .await
         .expect("scrape");
 
@@ -297,7 +359,7 @@ async fn test_scrape_companies_empty_listing_returns_empty() {
 }
 
 #[tokio::test]
-async fn test_scrape_products_no_total_record_returns_empty() {
+async fn test_fetch_subcategory_no_records_returns_empty() {
     let ctx = common::setup_mock().await;
 
     let strategy = types::SubStrategy {
@@ -308,13 +370,13 @@ async fn test_scrape_products_no_total_record_returns_empty() {
     };
 
     ctx.server.mock(|when, then| {
-        when.method(GET).path("/index.php");
+        when.method(POST).path("/index.php");
         then.status(200)
             .header("content-type", "text/html")
             .body("<html><body>Nothing here</body></html>");
     });
 
-    let records = scraper::scrape_products(&ctx.portal, &strategy)
+    let records = listing::fetch_subcategory(&ctx.portal, &strategy)
         .await
         .expect("scrape");
     assert_eq!(records.len(), 0);

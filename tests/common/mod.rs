@@ -77,21 +77,38 @@ pub fn listing_html(records: &[(&str, &str)], counter: u32) -> String {
     )
 }
 
-/// First page of a GET product listing (old flow) with a Total Record line.
-pub fn product_listing_html(records: &[(&str, &str, &str)], total_pages: u32) -> String {
-    let mut spans = String::new();
-    for (name, address, _expiry) in records {
-        spans.push_str(&format!(
-            "<span class=\"company-name\">{name}</span>\n\
-             <span class=\"company-address\">{address}</span>\n"
+/// A product/premise listing page in the portal's table-row shape:
+/// name span, optional JENAMA brand span, certificate holder, and an
+/// expiry date cell. Pages past the first need only the Total Record line.
+pub fn product_listing_html(records: &[(&str, &str, &str, &str)], total_pages: u32) -> String {
+    let mut rows = String::new();
+    for (i, (name, brand, company, expiry)) in records.iter().enumerate() {
+        let brand_span = if brand.is_empty() {
+            String::new()
+        } else {
+            format!("<span class=\"company-brand\"><br><b>JENAMA:</b>{brand}<br></span>\n")
+        };
+        rows.push_str(&format!(
+            "<tr>\n\
+             <td class=\"text-center font-semibold\">{}</td>\n\
+             <td>\n\
+             <span class=\"company-name\">{name}</span>\n\
+             {brand_span}\
+             <span class=\"company-address\"><i>{company}</i></span>\n\
+             </td>\n\
+             <td class=\"text-center\">{expiry}</td>\n\
+             </tr>\n",
+            i + 1
         ));
     }
-    let total_pages_line = format!("Total Record : 99999 From {total_pages}");
+    let total_pages_line = format!("Total Record : 999 - Page 1 From {total_pages}");
 
     format!(
         "<html><body>\n\
          {total_pages_line}\n\
-         {spans}\
+         <table>\n\
+         {rows}\
+         </table>\n\
          </body></html>"
     )
 }
