@@ -1,5 +1,4 @@
 use halal_crawler::config;
-use halal_crawler::constants::MAX_CONCURRENT;
 
 #[test]
 fn test_company_strategies_count() {
@@ -19,9 +18,8 @@ fn test_company_strategies_all_have_co_subcode() {
 }
 
 #[test]
-fn test_company_strategies_all_have_data_param() {
+fn test_company_strategies_have_codes_and_names() {
     for s in &config::company_strategies() {
-        assert!(!s.data_param.is_empty());
         assert!(!s.category_code.is_empty());
         assert!(!s.category_name.is_empty());
     }
@@ -47,15 +45,4 @@ fn test_other_strategies_have_unique_codes() {
     codes.sort();
     codes.dedup();
     assert_eq!(codes.len(), 9);
-}
-
-#[test]
-fn test_semaphore_permits() {
-    let s = config::semaphore();
-    assert_eq!(s.available_permits(), MAX_CONCURRENT);
-}
-
-#[test]
-fn test_max_concurrent_is_positive() {
-    assert!(MAX_CONCURRENT > 0);
 }

@@ -1,7 +1,6 @@
-use std::sync::Arc;
 use std::time::Instant;
 
-use halal_crawler::{config, db, http, scraper, types};
+use halal_crawler::{config, db, portal, scraper, types};
 use types::Error;
 
 #[tokio::main]
@@ -15,13 +14,12 @@ async fn main() -> Result<(), Error> {
     let db_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost/halal".to_string());
 
-    let client = Arc::new(http::build_client()?);
-    let semaphore = config::semaphore();
+    let portal = portal::Portal::new(portal::DEFAULT_BASE_URL)?;
     let pool = db::init(&db_url).await?;
 
     // Seed PHP session
     println!("  getting session...");
-    http::init_session(&client).await?;
+    portal.init_session().await?;
 
     let company_strategies = config::company_strategies();
     let mut total_companies = 0usize;
@@ -37,7 +35,7 @@ async fn main() -> Result<(), Error> {
             s.category_code
         );
 
-        match scraper::scrape_companies(&client, &semaphore, s).await {
+        match scraper::scrape_companies(&portal, s).await {
             Ok(records) => {
                 let n = db::insert_companies(&pool, &records, s.category_code).await?;
                 total_companies += n;

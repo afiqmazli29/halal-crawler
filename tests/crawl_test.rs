@@ -5,9 +5,29 @@ use halal_crawler::{db, scraper, types};
 
 mod common;
 
+fn company_strategy() -> types::SubStrategy {
+    types::SubStrategy {
+        category_code: "BG",
+        category_name: "Barang Gunaan",
+        sub_code: "CO",
+        sub_name: "Syarikat",
+    }
+}
+
+fn product_strategy() -> types::SubStrategy {
+    types::SubStrategy {
+        category_code: "PR",
+        category_name: "Produk Makanan",
+        sub_code: "PR",
+        sub_name: "Produk",
+    }
+}
+
+// ── DB insert/upsert (needs live PostgreSQL) ────────────────────
+
 #[tokio::test]
 async fn test_db_insert_and_query_companies() {
-    let ctx = common::setup().await;
+    let ctx = common::setup_db().await;
 
     let names = &["t1_ABC Sdn Bhd", "t1_XYZ Sdn Bhd"];
     let records = vec![
@@ -33,12 +53,12 @@ async fn test_db_insert_and_query_companies() {
             .expect("query");
     assert_eq!(name, names[0]);
 
-    common::cleanup(&ctx, names, &[]).await;
+    common::cleanup(&ctx.pool, names, &[]).await;
 }
 
 #[tokio::test]
 async fn test_db_insert_and_query_products() {
-    let ctx = common::setup().await;
+    let ctx = common::setup_db().await;
 
     let company_names = &["t2_Parent Co"];
     db::insert_companies(
@@ -69,12 +89,12 @@ async fn test_db_insert_and_query_products() {
     assert_eq!(brand, "BrandA");
     assert_eq!(expiry, "2026-12-31");
 
-    common::cleanup(&ctx, company_names, product_names).await;
+    common::cleanup(&ctx.pool, company_names, product_names).await;
 }
 
 #[tokio::test]
 async fn test_db_insert_empty_returns_zero() {
-    let ctx = common::setup().await;
+    let ctx = common::setup_db().await;
 
     let n = db::insert_companies(&ctx.pool, &[], "BG")
         .await
@@ -89,7 +109,7 @@ async fn test_db_insert_empty_returns_zero() {
 
 #[tokio::test]
 async fn test_db_upsert_companies() {
-    let ctx = common::setup().await;
+    let ctx = common::setup_db().await;
 
     let names = &["t4_Foo"];
     let first = vec![json!({"nama_syarikat": names[0], "no_telefon": "111", "negeri": "KL"})];
@@ -115,102 +135,121 @@ async fn test_db_upsert_companies() {
         .unwrap();
     assert_eq!(phone, "222");
 
-    common::cleanup(&ctx, names, &[]).await;
+    common::cleanup(&ctx.pool, names, &[]).await;
 }
 
+// ── Crawl tests (httpmock only, no database) ────────────────────
+
 #[tokio::test]
-async fn test_scrape_companies_mocked() {
-    let ctx = common::setup().await;
-    let base = common::mock_base(&ctx.server);
+async fn test_scrape_companies_dedups_across_letters() {
+    let ctx = common::setup_mock().await;
 
-    let strategy = types::SubStrategy {
-        category_code: "BG",
-        category_name: "Barang Gunaan",
-        data_param: "testdata",
-        sub_code: "CO",
-        sub_name: "Syarikat",
-    };
-
-    let detail1 = format!("{}/detail/t5_1", ctx.server.base_url());
-    let detail2 = format!("{}/detail/t5_2", ctx.server.base_url());
-
-    let listing_html = common::company_listing_html(&[&detail1, &detail2]);
-
+    // Every letter gets the same listing; the crawl must dedup by name.
+    let html = common::listing_html(
+        &[
+            ("t5_ABC Sdn Bhd", "123 Jalan, 50000 KL, Selangor"),
+            ("t5_XYZ Sdn Bhd", "456 Jalan, 47000 Shah Alam, Selangor"),
+        ],
+        0,
+    );
     ctx.server.mock(|when, then| {
-        when.method(GET)
-            .path("/index.php")
-            .query_param("data", "testdata")
-            .query_param("category", "BG");
+        when.method(POST).path("/index.php");
         then.status(200)
             .header("content-type", "text/html")
-            .body(listing_html);
+            .body(html);
     });
 
-    ctx.server.mock(|when, then| {
-        when.method(GET).path("/detail/t5_1");
-        then.status(200)
-            .header("content-type", "text/html")
-            .body(common::company_detail_html(
-                "t5_ABC Sdn Bhd",
-                "03-111",
-                "Selangor",
-            ));
-    });
-    ctx.server.mock(|when, then| {
-        when.method(GET).path("/detail/t5_2");
-        then.status(200)
-            .header("content-type", "text/html")
-            .body(common::company_detail_html(
-                "t5_XYZ Sdn Bhd",
-                "03-222",
-                "KL",
-            ));
-    });
-
-    let records = scraper::scrape_companies(&ctx.client, &ctx.semaphore, &strategy)
+    let records = scraper::scrape_companies(&ctx.portal, &company_strategy())
         .await
         .expect("scrape");
 
     assert_eq!(records.len(), 2);
-
     let names: Vec<&str> = records
         .iter()
-        .map(|r| r["nama_syarikat"].as_str().unwrap_or(""))
+        .map(|r| r["name"].as_str().unwrap_or(""))
         .collect();
     assert!(names.contains(&"t5_ABC Sdn Bhd"));
     assert!(names.contains(&"t5_XYZ Sdn Bhd"));
+}
 
-    let inserted = db::insert_companies(&ctx.pool, &records, "BG")
+#[tokio::test]
+async fn test_scrape_companies_paginates_via_counter() {
+    let ctx = common::setup_mock().await;
+
+    // Page 1 returns counter=41, page 2 returns counter=0 (end).
+    ctx.server.mock(|when, then| {
+        when.method(POST)
+            .path("/index.php")
+            .query_param("cari", "a")
+            .query_param("page", "1");
+        then.status(200)
+            .header("content-type", "text/html")
+            .body(common::listing_html(
+                &[("t6_Alpha One", "1 Jalan, 50000 KL, Kuala Lumpur")],
+                41,
+            ));
+    });
+    ctx.server.mock(|when, then| {
+        when.method(POST)
+            .path("/index.php")
+            .query_param("cari", "a")
+            .query_param("page", "2");
+        then.status(200)
+            .header("content-type", "text/html")
+            .body(common::listing_html(
+                &[("t6_Alpha Two", "2 Jalan, 47000 Shah Alam, Selangor")],
+                0,
+            ));
+    });
+    ctx.server.mock(|when, then| {
+        when.method(POST).path("/index.php");
+        then.status(200)
+            .header("content-type", "text/html")
+            .body("<html><body>empty</body></html>");
+    });
+
+    let records = scraper::scrape_companies(&ctx.portal, &company_strategy())
         .await
-        .expect("insert");
-    assert_eq!(inserted, 2);
+        .expect("scrape");
 
-    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM companies WHERE name LIKE 't5_%'")
-        .fetch_one(&ctx.pool)
+    let names: Vec<&str> = records
+        .iter()
+        .map(|r| r["name"].as_str().unwrap_or(""))
+        .collect();
+    assert!(names.contains(&"t6_Alpha One"), "got: {names:?}");
+    assert!(names.contains(&"t6_Alpha Two"), "got: {names:?}");
+    assert_eq!(records.len(), 2);
+}
+
+#[tokio::test]
+async fn test_scrape_companies_parses_address_fields() {
+    let ctx = common::setup_mock().await;
+
+    let html = common::listing_html(&[("t7_Addr Co", "12 Jalan, 63000 Cyberjaya, Selangor")], 0);
+    ctx.server.mock(|when, then| {
+        when.method(POST).path("/index.php");
+        then.status(200)
+            .header("content-type", "text/html")
+            .body(html);
+    });
+
+    let records = scraper::scrape_companies(&ctx.portal, &company_strategy())
         .await
-        .unwrap();
-    assert_eq!(count, 2);
+        .expect("scrape");
 
-    common::cleanup(&ctx, &["t5_ABC Sdn Bhd", "t5_XYZ Sdn Bhd"], &[]).await;
+    assert_eq!(records[0]["name"], "t7_Addr Co");
+    assert_eq!(records[0]["postcode"], "63000");
+    assert_eq!(records[0]["state"], "Selangor");
 }
 
 #[tokio::test]
 async fn test_scrape_products_mocked() {
-    let ctx = common::setup().await;
-    let base = common::mock_base(&ctx.server);
-
-    let strategy = types::SubStrategy {
-        category_code: "PR",
-        category_name: "Produk Makanan",
-        data_param: "testdata",
-        sub_code: "PR",
-        sub_name: "Produk",
-    };
+    let ctx = common::setup_mock().await;
 
     let page1 = common::product_listing_html(
         &[
-            (1, "t6_Biskut A", "Alamat A", "2026-12-31"),
-            (2, "t6_Biskut B", "Alamat B", "2027-06-15"),
+            ("t6_Biskut A", "Alamat A", "2026-12-31"),
+            ("t6_Biskut B", "Alamat B", "2027-06-15"),
         ],
         1,
     );
@@ -218,7 +257,6 @@ async fn test_scrape_products_mocked() {
     ctx.server.mock(|when, then| {
         when.method(GET)
             .path("/index.php")
-            .query_param("data", "testdata")
             .query_param("category", "PR")
             .query_param("subcategory", "PR");
         then.status(200)
@@ -226,7 +264,7 @@ async fn test_scrape_products_mocked() {
             .body(page1);
     });
 
-    let records = scraper::scrape_products(&ctx.client, &ctx.semaphore, &base, &strategy)
+    let records = scraper::scrape_products(&ctx.portal, &product_strategy())
         .await
         .expect("scrape");
 
@@ -238,45 +276,20 @@ async fn test_scrape_products_mocked() {
         .collect();
     assert!(names.contains(&"t6_Biskut A"));
     assert!(names.contains(&"t6_Biskut B"));
-
-    let inserted = db::insert_products(&ctx.pool, &records, "PR", "PR")
-        .await
-        .expect("insert");
-    assert_eq!(inserted, 2);
-
-    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM products WHERE name LIKE 't6_%'")
-        .fetch_one(&ctx.pool)
-        .await
-        .unwrap();
-    assert_eq!(count, 2);
-
-    common::cleanup(&ctx, &[], &["t6_Biskut A", "t6_Biskut B"]).await;
 }
 
 #[tokio::test]
-async fn test_scrape_companies_empty_listing_falls_back() {
-    let ctx = common::setup().await;
-    let base = common::mock_base(&ctx.server);
-
-    let strategy = types::SubStrategy {
-        category_code: "BG",
-        category_name: "Barang Gunaan",
-        data_param: "testdata",
-        sub_code: "CO",
-        sub_name: "Syarikat",
-    };
+async fn test_scrape_companies_empty_listing_returns_empty() {
+    let ctx = common::setup_mock().await;
 
     ctx.server.mock(|when, then| {
-        when.method(GET)
-            .path("/index.php")
-            .query_param("data", "testdata")
-            .query_param("category", "BG");
+        when.method(POST).path("/index.php");
         then.status(200)
             .header("content-type", "text/html")
-            .body("<html><body>No onclick links here</body></html>");
+            .body("<html><body>No spans here</body></html>");
     });
 
-    let records = scraper::scrape_companies(&ctx.client, &ctx.semaphore, &strategy)
+    let records = scraper::scrape_companies(&ctx.portal, &company_strategy())
         .await
         .expect("scrape");
 
@@ -285,13 +298,11 @@ async fn test_scrape_companies_empty_listing_falls_back() {
 
 #[tokio::test]
 async fn test_scrape_products_no_total_record_returns_empty() {
-    let ctx = common::setup().await;
-    let base = common::mock_base(&ctx.server);
+    let ctx = common::setup_mock().await;
 
     let strategy = types::SubStrategy {
         category_code: "ZZ",
         category_name: "Unknown",
-        data_param: "testdata",
         sub_code: "ZZ",
         sub_name: "Unknown",
     };
@@ -303,7 +314,7 @@ async fn test_scrape_products_no_total_record_returns_empty() {
             .body("<html><body>Nothing here</body></html>");
     });
 
-    let records = scraper::scrape_products(&ctx.client, &ctx.semaphore, &base, &strategy)
+    let records = scraper::scrape_products(&ctx.portal, &strategy)
         .await
         .expect("scrape");
     assert_eq!(records.len(), 0);

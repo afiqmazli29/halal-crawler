@@ -1,19 +1,16 @@
-use std::sync::Arc;
+use std::time::Duration;
 
 use httpmock::MockServer;
 use sqlx::PgPool;
-use tokio::sync::Semaphore;
 
-use halal_crawler::{config, db};
+use halal_crawler::{db, portal::Portal};
 
-pub struct TestCtx {
+/// Context for tests that need a real PostgreSQL database.
+pub struct DbCtx {
     pub pool: PgPool,
-    pub server: MockServer,
-    pub client: Arc<reqwest::Client>,
-    pub semaphore: Arc<Semaphore>,
 }
 
-pub async fn setup() -> TestCtx {
+pub async fn setup_db() -> DbCtx {
     let db_url = std::env::var("TEST_DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost/halal".to_string());
 
@@ -24,7 +21,7 @@ pub async fn setup() -> TestCtx {
                 Ok(p) => break p,
                 Err(e) if attempts < 5 => {
                     attempts += 1;
-                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    tokio::time::sleep(Duration::from_millis(200)).await;
                     eprintln!("DB init retry {attempts}: {e}");
                 }
                 Err(e) => panic!("DB init failed after {attempts} retries: {e}"),
@@ -32,73 +29,61 @@ pub async fn setup() -> TestCtx {
         }
     };
 
-    let server = MockServer::start();
-
-    TestCtx {
-        pool,
-        server,
-        client: Arc::new(reqwest::Client::new()),
-        semaphore: config::semaphore(),
-    }
+    DbCtx { pool }
 }
 
-pub async fn cleanup(ctx: &TestCtx, company_names: &[&str], product_names: &[&str]) {
+/// Context for crawl tests: an httpmock server with a Portal rooted at it.
+/// No database needed — the Portal is the only adapter under test.
+pub struct MockCtx {
+    pub server: MockServer,
+    pub portal: Portal,
+}
+
+pub async fn setup_mock() -> MockCtx {
+    let server = MockServer::start();
+    let portal = Portal::new(server.base_url()).expect("portal");
+    MockCtx { server, portal }
+}
+
+pub async fn cleanup(pool: &PgPool, company_names: &[&str], product_names: &[&str]) {
     for name in company_names {
         sqlx::query("DELETE FROM companies WHERE name = $1")
             .bind(name)
-            .execute(&ctx.pool)
+            .execute(pool)
             .await
             .ok();
     }
     for name in product_names {
         sqlx::query("DELETE FROM products WHERE name = $1")
             .bind(name)
-            .execute(&ctx.pool)
+            .execute(pool)
             .await
             .ok();
     }
 }
 
-pub fn mock_base(server: &MockServer) -> String {
-    server.url("/index.php")
-}
-
-pub fn company_detail_html(name: &str, phone: &str, state: &str) -> String {
-    format!(
-        "<html><body><table>\n\
-         <tr>\n<td>Nama Syarikat</td>\n<td>{name}</td>\n</tr>\n\
-         <tr>\n<td>No. Telefon</td>\n<td>{phone}</td>\n</tr>\n\
-         <tr>\n<td>Negeri</td>\n<td>{state}</td>\n</tr>\n\
-         </table></body></html>"
-    )
-}
-
-pub fn company_listing_html(detail_links: &[&str]) -> String {
-    let mut links = String::new();
-    for (i, link) in detail_links.iter().enumerate() {
-        links.push_str(&format!(
-            "<tr><td>{}</td><td><a onclick=\"openModal('{}', 'modal')\">view</a></td></tr>\n",
-            i + 1,
-            link
+/// A directory search response: span-based listing plus the hdnCounter
+/// hidden input, as the live portal renders it (value may be unquoted).
+pub fn listing_html(records: &[(&str, &str)], counter: u32) -> String {
+    let mut spans = String::new();
+    for (name, address) in records {
+        spans.push_str(&format!(
+            "<span class=\"company-name\">{name}</span>\n\
+             <span class=\"company-address\">{address}</span>\n"
         ));
     }
     format!(
-        "<html><body><table>\n\
-         <tr><td>Bil</td><td>Tindakan</td></tr>\n\
-         {links}\
-         </table></body></html>"
+        "<html><body>\n{spans}<input type=\"hidden\" name=\"hdnCounter\" value={counter}>\n</body></html>"
     )
 }
 
-pub fn product_listing_html(records: &[(u32, &str, &str, &str)], total_pages: u32) -> String {
-    let mut rows = String::new();
-    for (bil, name, address, expiry) in records {
-        rows.push_str(&format!(
-            "<tr>\n\
-             <td>{bil}</td>\n\
-             <td>{name}<br>{address}</td>\n\
-             <td>{expiry}</td>\n\
-             </tr>\n"
+/// First page of a GET product listing (old flow) with a Total Record line.
+pub fn product_listing_html(records: &[(&str, &str, &str)], total_pages: u32) -> String {
+    let mut spans = String::new();
+    for (name, address, _expiry) in records {
+        spans.push_str(&format!(
+            "<span class=\"company-name\">{name}</span>\n\
+             <span class=\"company-address\">{address}</span>\n"
         ));
     }
     let total_pages_line = format!("Total Record : 99999 From {total_pages}");
@@ -106,10 +91,7 @@ pub fn product_listing_html(records: &[(u32, &str, &str, &str)], total_pages: u3
     format!(
         "<html><body>\n\
          {total_pages_line}\n\
-         <table>\n\
-         <tr>\n<td>Bil</td>\n<td>Name</td>\n<td>Expiry</td>\n</tr>\n\
-         {rows}\
-         </table>\n\
+         {spans}\
          </body></html>"
     )
 }

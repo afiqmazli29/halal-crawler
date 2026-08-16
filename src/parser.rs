@@ -45,17 +45,18 @@ pub fn parse_table(html: &str, _page: u32) -> Vec<serde_json::Value> {
 
 /// Extract the hdnCounter value from the response HTML for pagination.
 pub fn extract_counter(html: &str) -> u32 {
-    // Look for <input type="hidden" name="hdnCounter" value="41">
+    // The portal emits both value=21 and value="41", so accept both.
     for line in html.lines() {
         if let Some(pos) = line.find("hdnCounter") {
-            if let Some(v_start) = line[pos..].find("value=\"") {
-                let after = &line[pos + v_start + 7..];
-                if let Some(v_end) = after.find('"') {
-                    let val = &after[..v_end];
-                    if let Ok(n) = val.parse::<u32>() {
-                        return n;
-                    }
-                }
+            let after = &line[pos..];
+            let Some(v_pos) = after.find("value=") else {
+                continue;
+            };
+            let v = &after[v_pos + "value=".len()..];
+            let v = v.trim_start().trim_start_matches('"');
+            let digits: String = v.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(n) = digits.parse::<u32>() {
+                return n;
             }
         }
     }

@@ -1,15 +1,12 @@
-use reqwest::Client;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::Semaphore;
 
-use crate::http;
 use crate::parser;
+use crate::portal::Portal;
 use crate::types::{Error, SubStrategy};
 
 pub(crate) async fn scrape_sub(
-    client: &Arc<Client>,
-    semaphore: &Arc<Semaphore>,
+    portal: &Portal,
     base_url: &str,
     strategy: &SubStrategy,
     max_pages: u32,
@@ -27,12 +24,13 @@ pub(crate) async fn scrape_sub(
             format!("&{pname}={}", strategy.sub_code)
         };
         let url1 = format!(
-            "{base_url}?data={}&category={}{sp}",
-            strategy.data_param, strategy.category_code
+            "{base_url}/index.php?data={}&category={}{sp}",
+            crate::constants::DATA_PARAM,
+            strategy.category_code
         );
 
         let t0 = Instant::now();
-        let html = http::scrape_get_retry(client, semaphore, &url1, 3).await?;
+        let html = portal.get_retry(&url1, 3).await?;
 
         if html.contains("Total Record") {
             let total_pages = parser::extract_total_pages(&html).min(max_pages);
@@ -44,10 +42,8 @@ pub(crate) async fn scrape_sub(
 
             let mut records = parser::parse_table(&html, 1);
             if total_pages > 1 {
-                records.extend(
-                    fetch_remaining(client, semaphore, base_url, strategy, &sp, total_pages)
-                        .await?,
-                );
+                records
+                    .extend(fetch_remaining(portal, base_url, strategy, &sp, total_pages).await?);
             }
             return Ok(records);
         }
@@ -57,8 +53,7 @@ pub(crate) async fn scrape_sub(
 }
 
 async fn fetch_remaining(
-    client: &Arc<Client>,
-    semaphore: &Arc<Semaphore>,
+    portal: &Portal,
     base_url: &str,
     strategy: &SubStrategy,
     sub_param: &str,
@@ -73,16 +68,16 @@ async fn fetch_remaining(
 
     for page in 2..=total_pages {
         let url = format!(
-            "{base_url}?data={}&category={}{sub_param}&page={page}",
-            strategy.data_param, strategy.category_code
+            "{base_url}/index.php?data={}&category={}{sub_param}&page={page}",
+            crate::constants::DATA_PARAM,
+            strategy.category_code
         );
-        let c = Arc::clone(client);
-        let s = Arc::clone(semaphore);
         let d = Arc::clone(&done);
+        let portal = Portal::clone(portal);
 
         set.spawn(async move {
             let t = Instant::now();
-            let html = http::scrape_get_retry(&c, &s, &url, 3).await?;
+            let html = portal.get_retry(&url, 3).await?;
             let r = parser::parse_table(&html, page);
             let n = r.len();
             d.fetch_add(1, Ordering::Relaxed);
