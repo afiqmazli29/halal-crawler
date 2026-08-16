@@ -45,10 +45,35 @@ async fn main() -> Result<(), Error> {
         }
     }
 
+    // ── Phase 2: Subcategory listings (products, premises, …) ─────────
+    let other_strategies = config::other_strategies();
+    let mut total_products = 0usize;
+
+    println!("\n═══ PHASE 2: SUBCATEGORY LISTINGS ═══");
+    for (idx, s) in other_strategies.iter().enumerate() {
+        println!(
+            "\n┌─ [{}/{}] {} — {}",
+            idx + 1,
+            other_strategies.len(),
+            s.category_name,
+            s.sub_name
+        );
+
+        match listing::fetch_subcategory(&portal, s).await {
+            Ok(records) => {
+                let n = db::insert_products(&pool, &records, s.category_code, s.sub_code).await?;
+                total_products += n;
+                println!("└─ {n} products → DB");
+            }
+            Err(e) => eprintln!("└─ ✗ {e}"),
+        }
+    }
+
     // ── Summary ───────────────────────────────────────────────────────
     let elapsed = started.elapsed();
     println!("\n╔══════════════════════════════════════════╗");
     println!("║  DONE: {} companies          ║", total_companies);
+    println!("║        {} products           ║", total_products);
     println!(
         "║  in {:.1}s                          ║",
         elapsed.as_secs_f32()
