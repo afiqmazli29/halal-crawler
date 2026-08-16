@@ -43,6 +43,25 @@ pub fn parse_table(html: &str, _page: u32) -> Vec<serde_json::Value> {
     records
 }
 
+/// Extract the hdnCounter value from the response HTML for pagination.
+pub fn extract_counter(html: &str) -> u32 {
+    // Look for <input type="hidden" name="hdnCounter" value="41">
+    for line in html.lines() {
+        if let Some(pos) = line.find("hdnCounter") {
+            if let Some(v_start) = line[pos..].find("value=\"") {
+                let after = &line[pos + v_start + 7..];
+                if let Some(v_end) = after.find('"') {
+                    let val = &after[..v_end];
+                    if let Ok(n) = val.parse::<u32>() {
+                        return n;
+                    }
+                }
+            }
+        }
+    }
+    0
+}
+
 /// Extract exactly 5-digit postcode from address, or empty string.
 fn extract_postcode(addr: &str) -> String {
     for part in addr.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {

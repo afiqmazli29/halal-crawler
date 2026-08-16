@@ -79,27 +79,28 @@ pub async fn scrape_get_retry(
     Err("all retries exhausted".into())
 }
 
-/// POST search with browser headers.
+/// POST search with pagination support.
+/// `counter` is the hdnCounter value from the previous page (0 for first page).
 pub async fn search_directory(
     client: &Client,
     semaphore: &Semaphore,
     category: &str,
     letter: char,
+    page: u32,
+    counter: &str,
 ) -> Result<String, Error> {
     let _permit = semaphore.acquire().await?;
 
-    let url = "https://www.halal.gov.my/index.php?data=ZGlyZWN0b3J5L2luZGV4X2RpcmVjdG9yeTs7Ozs=";
+    let url = format!(
+        "https://www.halal.gov.my/index.php?data=ZGlyZWN0b3J5L2luZGV4X2RpcmVjdG9yeTs7Ozs=&negeri=&category={category}&page={page}&cari={letter}"
+    );
 
     let resp = client
-        .post(url)
+        .post(&url)
         .header(REFERER, "https://www.halal.gov.my/index.php")
         .header(ORIGIN, "https://www.halal.gov.my")
         .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .form(&[
-            ("category", category),
-            ("cari", &letter.to_string()),
-            ("search", ""),
-        ])
+        .form(&[("hdnCounter", counter), ("t", ""), ("a", ""), ("ty", "CO")])
         .send()
         .await?;
 
