@@ -73,14 +73,14 @@ fn test_parse_table_basic() {
     let records = parse_table(html);
     assert_eq!(records.len(), 2);
 
-    assert_eq!(records[0]["name"], "Syarikat ABC");
-    assert_eq!(records[0]["address"], "123 Jalan, 50000 KL, Selangor");
-    assert_eq!(records[0]["postcode"], "50000");
-    assert_eq!(records[0]["state"], "Selangor");
+    assert_eq!(records[0].name, "Syarikat ABC");
+    assert_eq!(records[0].address, "123 Jalan, 50000 KL, Selangor");
+    assert_eq!(records[0].postcode, "50000");
+    assert_eq!(records[0].state, "Selangor");
 
-    assert_eq!(records[1]["name"], "Syarikat XYZ");
-    assert_eq!(records[1]["postcode"], "47000");
-    assert_eq!(records[1]["state"], "Selangor");
+    assert_eq!(records[1].name, "Syarikat XYZ");
+    assert_eq!(records[1].postcode, "47000");
+    assert_eq!(records[1].state, "Selangor");
 }
 
 #[test]
@@ -100,7 +100,7 @@ fn test_parse_table_skips_empty_name() {
 
     let records = parse_table(html);
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["name"], "Valid Co");
+    assert_eq!(records[0].name, "Valid Co");
 }
 
 #[test]
@@ -109,16 +109,16 @@ fn test_parse_table_missing_address() {
 
     let records = parse_table(html);
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["name"], "Only Name Co");
-    assert_eq!(records[0]["address"], "");
+    assert_eq!(records[0].name, "Only Name Co");
+    assert_eq!(records[0].address, "");
 }
 
 #[test]
 fn test_parse_table_no_postcode_or_state() {
     let html = "<span class=\"company-name\">N</span>\n<span class=\"company-address\">Somewhere vague</span>";
     let records = parse_table(html);
-    assert_eq!(records[0]["postcode"], "");
-    assert_eq!(records[0]["state"], "");
+    assert_eq!(records[0].postcode, "");
+    assert_eq!(records[0].state, "");
 }
 
 // ── parse_product_table ────────────────────────────────────────
@@ -139,10 +139,10 @@ fn test_parse_product_table_row() {
 
     let records = parse_product_table(html);
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["name"], "Biskut Coklat");
-    assert_eq!(records[0]["brand"], "Orang Kaya");
-    assert_eq!(records[0]["company"], "Syarikat Contoh Sdn Bhd");
-    assert_eq!(records[0]["expiry_date"], "31/05/2028");
+    assert_eq!(records[0].name, "Biskut Coklat");
+    assert_eq!(records[0].brand, "Orang Kaya");
+    assert_eq!(records[0].holder, "Syarikat Contoh Sdn Bhd");
+    assert_eq!(records[0].expiry_date, "31/05/2028");
 }
 
 #[test]
@@ -161,9 +161,9 @@ fn test_parse_product_table_empty_brand() {
 
     let records = parse_product_table(html);
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["name"], "Tanpa Jenama");
-    assert_eq!(records[0]["brand"], "");
-    assert_eq!(records[0]["expiry_date"], "");
+    assert_eq!(records[0].name, "Tanpa Jenama");
+    assert_eq!(records[0].brand, "");
+    assert_eq!(records[0].expiry_date, "");
 }
 
 #[test]

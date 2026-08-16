@@ -1,7 +1,7 @@
-use serde_json::Value;
 use sqlx::PgPool;
 
-use crate::types::{Error, pick_str};
+use crate::records::{Company, Product};
+use crate::types::Error;
 
 pub async fn init(db_url: &str) -> Result<PgPool, Error> {
     let pool = PgPool::connect(db_url).await?;
@@ -42,6 +42,7 @@ pub async fn init(db_url: &str) -> Result<PgPool, Error> {
             id SERIAL PRIMARY KEY,
             name TEXT NOT NULL,
             brand TEXT,
+            holder TEXT,
             category_code TEXT NOT NULL,
             subcategory_code TEXT NOT NULL,
             company_id INTEGER REFERENCES companies(id),
@@ -53,13 +54,22 @@ pub async fn init(db_url: &str) -> Result<PgPool, Error> {
     .execute(&pool)
     .await?;
 
+    for col in ["holder"] {
+        sqlx::query(&format!(
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS {col} TEXT"
+        ))
+        .execute(&pool)
+        .await
+        .ok();
+    }
+
     println!("  DB ready: {db_url}");
     Ok(pool)
 }
 
 pub async fn insert_companies(
     pool: &PgPool,
-    records: &[Value],
+    records: &[Company],
     category_code: &str,
 ) -> Result<usize, Error> {
     if records.is_empty() {
@@ -67,43 +77,20 @@ pub async fn insert_companies(
     }
     let mut tx = pool.begin().await?;
     for r in records {
-        let name = pick_str(r, &["nama_syarikat", "name", "company_name", "nama"]);
-        let address = pick_str(r, &["alamat", "address"]);
-        let postcode = pick_str(r, &["postcode", "poskod"]);
-        let state = pick_str(r, &["negeri", "state"]);
-        let phone = pick_str(r, &["no_telefon", "phone_no", "phone", "telefon"]);
-        let fax = pick_str(r, &["no_fax", "fax_no", "fax"]);
-        let email = pick_str(r, &["e_mel", "email", "emel"]);
-        let website = pick_str(r, &["laman_web", "website", "web"]);
-        let ref_no = pick_str(r, &["no_rujukan", "reference_no", "reference"]);
-        let officer = pick_str(r, &["pegawai", "officer", "nama_pegawai"]);
-
         sqlx::query(
-            "INSERT INTO companies (category_code, name, address, postcode, state, phone_no, fax_no, email, website, reference_no, officer)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            "INSERT INTO companies (category_code, name, address, postcode, state)
+             VALUES ($1, $2, $3, $4, $5)
              ON CONFLICT(category_code, name) DO UPDATE SET
                 address = excluded.address,
                 postcode = excluded.postcode,
                 state = excluded.state,
-                phone_no = excluded.phone_no,
-                fax_no = excluded.fax_no,
-                email = excluded.email,
-                website = excluded.website,
-                reference_no = excluded.reference_no,
-                officer = excluded.officer,
                 scraped_at = NOW()",
         )
         .bind(category_code)
-        .bind(&name)
-        .bind(&address)
-        .bind(&postcode)
-        .bind(&state)
-        .bind(&phone)
-        .bind(&fax)
-        .bind(&email)
-        .bind(&website)
-        .bind(&ref_no)
-        .bind(&officer)
+        .bind(&r.name)
+        .bind(&r.address)
+        .bind(&r.postcode)
+        .bind(&r.state)
         .execute(&mut *tx)
         .await?;
     }
@@ -113,7 +100,7 @@ pub async fn insert_companies(
 
 pub async fn insert_products(
     pool: &PgPool,
-    records: &[Value],
+    records: &[Product],
     category_code: &str,
     subcategory_code: &str,
 ) -> Result<usize, Error> {
@@ -122,25 +109,31 @@ pub async fn insert_products(
     }
     let mut tx = pool.begin().await?;
     for r in records {
-        let name = pick_str(r, &["name", "nama", "product_name"]);
-        let brand = pick_str(r, &["brand", "jenama"]);
-        let expiry = pick_str(r, &["expiry_date", "tarikh_tamat", "tempoh_sah_laku"]);
-
         sqlx::query(
-            "INSERT INTO products (name, brand, category_code, subcategory_code, expiry_date)
-             VALUES ($1, $2, $3, $4, $5)
+            "INSERT INTO products (name, brand, holder, category_code, subcategory_code, expiry_date)
+             VALUES ($1, $2, $3, $4, $5, $6)
              ON CONFLICT(category_code, subcategory_code, name, brand) DO UPDATE SET
+                holder = excluded.holder,
                 expiry_date = excluded.expiry_date,
                 scraped_at = NOW()",
         )
-        .bind(&name)
-        .bind(&brand)
+        .bind(&r.name)
+        .bind(&r.brand)
+        .bind(&r.holder)
         .bind(category_code)
         .bind(subcategory_code)
-        .bind(&expiry)
+        .bind(&r.expiry_date)
         .execute(&mut *tx)
         .await?;
     }
     tx.commit().await?;
     Ok(records.len())
+}
+
+/// A few random companies for the post-scrape sanity check.
+pub async fn sample_companies(pool: &PgPool) -> Result<Vec<(String, String)>, Error> {
+    let rows = sqlx::query_as("SELECT name, phone_no FROM companies ORDER BY RANDOM() LIMIT 3")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows)
 }

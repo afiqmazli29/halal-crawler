@@ -1,9 +1,9 @@
-use serde_json::Value;
 use std::collections::HashSet;
 use tokio::task::JoinSet;
 
 use crate::parser;
 use crate::portal::Portal;
+use crate::records::{Company, Product};
 use crate::types::{Error, SubStrategy};
 
 /// The directory listing as one deep module: both crawl modes live here,
@@ -14,7 +14,10 @@ use crate::types::{Error, SubStrategy};
 /// Crawl a category's companies: each letter a–z is searched, pages
 /// advance via the hdnCounter echoed back by the portal, and records
 /// are deduped by name.
-pub async fn fetch_companies(portal: &Portal, strategy: &SubStrategy) -> Result<Vec<Value>, Error> {
+pub async fn fetch_companies(
+    portal: &Portal,
+    strategy: &SubStrategy,
+) -> Result<Vec<Company>, Error> {
     let mut set = JoinSet::new();
     let category = strategy.category_code.to_string();
     let ty = strategy.sub_code;
@@ -32,7 +35,7 @@ pub async fn fetch_companies(portal: &Portal, strategy: &SubStrategy) -> Result<
         let (letter, records) = result??;
         let letter_count = records.len();
         for r in records {
-            let name = crate::types::pick_str(&r, &["name", "nama", "company_name"]);
+            let name = r.name.clone();
             if name.is_empty() || !seen.insert(name) {
                 continue;
             }
@@ -53,7 +56,7 @@ pub async fn fetch_companies(portal: &Portal, strategy: &SubStrategy) -> Result<
 pub async fn fetch_subcategory(
     portal: &Portal,
     strategy: &SubStrategy,
-) -> Result<Vec<Value>, Error> {
+) -> Result<Vec<Product>, Error> {
     let mut set = JoinSet::new();
     let category = strategy.category_code.to_string();
     let ty = strategy.sub_code;
@@ -85,7 +88,7 @@ async fn letter_crawl(
     category: String,
     ty: &'static str,
     letter: char,
-) -> Result<(char, Vec<Value>), Error> {
+) -> Result<(char, Vec<Company>), Error> {
     let mut records = Vec::new();
     let mut page = 1u32;
     let mut counter = String::new();
@@ -123,7 +126,7 @@ async fn letter_sub_crawl(
     category: String,
     ty: &'static str,
     letter: char,
-) -> Result<(char, Vec<Value>), Error> {
+) -> Result<(char, Vec<Product>), Error> {
     let html = portal.search(&category, ty, letter, 1, "0").await?;
     let total_pages = parser::extract_total_pages(&html);
     let page1_count = parser::parse_product_table(&html).len();

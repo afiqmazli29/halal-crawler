@@ -1,6 +1,7 @@
 use httpmock::prelude::*;
 use serde_json::json;
 
+use halal_crawler::records::{Company, Product};
 use halal_crawler::{db, listing, types};
 
 mod common;
@@ -31,8 +32,8 @@ async fn test_db_insert_and_query_companies() {
 
     let names = &["t1_ABC Sdn Bhd", "t1_XYZ Sdn Bhd"];
     let records = vec![
-        json!({"nama_syarikat": names[0], "no_telefon": "03-111", "negeri": "Selangor"}),
-        json!({"nama_syarikat": names[1], "no_telefon": "03-222", "negeri": "KL"}),
+        Company::from_value(&json!({"nama_syarikat": names[0], "negeri": "Selangor"})),
+        Company::from_value(&json!({"nama_syarikat": names[1], "negeri": "KL"})),
     ];
 
     let n = db::insert_companies(&ctx.pool, &records, "BG")
@@ -47,7 +48,7 @@ async fn test_db_insert_and_query_companies() {
     assert_eq!(count, 2);
 
     let (name,): (String,) =
-        sqlx::query_as("SELECT name FROM companies WHERE phone_no = '03-111' AND name LIKE 't1_%'")
+        sqlx::query_as("SELECT name FROM companies WHERE state = 'Selangor' AND name LIKE 't1_%'")
             .fetch_one(&ctx.pool)
             .await
             .expect("query");
@@ -63,7 +64,9 @@ async fn test_db_insert_and_query_products() {
     let company_names = &["t2_Parent Co"];
     db::insert_companies(
         &ctx.pool,
-        &[json!({"nama_syarikat": company_names[0]})],
+        &[Company::from_value(
+            &json!({"nama_syarikat": company_names[0]}),
+        )],
         "PR",
     )
     .await
@@ -71,8 +74,12 @@ async fn test_db_insert_and_query_products() {
 
     let product_names = &["t2_Product A", "t2_Product B"];
     let products = vec![
-        json!({"name": product_names[0], "brand": "BrandA", "expiry_date": "2026-12-31"}),
-        json!({"name": product_names[1], "brand": "BrandB", "expiry_date": "2027-06-15"}),
+        Product::from_value(
+            &json!({"name": product_names[0], "brand": "BrandA", "expiry_date": "2026-12-31", "company": "t2_Parent Co"}),
+        ),
+        Product::from_value(
+            &json!({"name": product_names[1], "brand": "BrandB", "expiry_date": "2027-06-15", "company": "t2_Parent Co"}),
+        ),
     ];
 
     let n = db::insert_products(&ctx.pool, &products, "PR", "PR")
@@ -80,14 +87,15 @@ async fn test_db_insert_and_query_products() {
         .expect("insert");
     assert_eq!(n, 2);
 
-    let (name, brand, expiry): (String, String, String) =
-        sqlx::query_as("SELECT name, brand, expiry_date FROM products WHERE name LIKE 't2_%' ORDER BY name LIMIT 1")
+    let (name, brand, expiry, holder): (String, String, String, String) =
+        sqlx::query_as("SELECT name, brand, expiry_date, holder FROM products WHERE name LIKE 't2_%' ORDER BY name LIMIT 1")
             .fetch_one(&ctx.pool)
             .await
             .expect("query");
     assert_eq!(name, product_names[0]);
     assert_eq!(brand, "BrandA");
     assert_eq!(expiry, "2026-12-31");
+    assert_eq!(holder, "t2_Parent Co");
 
     common::cleanup(&ctx.pool, company_names, product_names).await;
 }
@@ -112,11 +120,14 @@ async fn test_db_upsert_companies() {
     let ctx = common::setup_db().await;
 
     let names = &["t4_Foo"];
-    let first = vec![json!({"nama_syarikat": names[0], "no_telefon": "111", "negeri": "KL"})];
+    let first = vec![Company::from_value(
+        &json!({"nama_syarikat": names[0], "state": "KL"}),
+    )];
     db::insert_companies(&ctx.pool, &first, "BG").await.unwrap();
 
-    let second =
-        vec![json!({"nama_syarikat": names[0], "no_telefon": "222", "negeri": "Selangor"})];
+    let second = vec![Company::from_value(
+        &json!({"nama_syarikat": names[0], "state": "Selangor"}),
+    )];
     let n = db::insert_companies(&ctx.pool, &second, "BG")
         .await
         .unwrap();
@@ -128,12 +139,12 @@ async fn test_db_upsert_companies() {
         .unwrap();
     assert_eq!(count, 1);
 
-    let (phone,): (String,) = sqlx::query_as("SELECT phone_no FROM companies WHERE name = $1")
+    let (state,): (String,) = sqlx::query_as("SELECT state FROM companies WHERE name = $1")
         .bind(names[0])
         .fetch_one(&ctx.pool)
         .await
         .unwrap();
-    assert_eq!(phone, "222");
+    assert_eq!(state, "Selangor");
 
     common::cleanup(&ctx.pool, names, &[]).await;
 }
@@ -164,10 +175,7 @@ async fn test_scrape_companies_dedups_across_letters() {
         .expect("scrape");
 
     assert_eq!(records.len(), 2);
-    let names: Vec<&str> = records
-        .iter()
-        .map(|r| r["name"].as_str().unwrap_or(""))
-        .collect();
+    let names: Vec<&str> = records.iter().map(|r| r.name.as_str()).collect();
     assert!(names.contains(&"t5_ABC Sdn Bhd"));
     assert!(names.contains(&"t5_XYZ Sdn Bhd"));
 }
@@ -212,10 +220,7 @@ async fn test_scrape_companies_paginates_via_counter() {
         .await
         .expect("scrape");
 
-    let names: Vec<&str> = records
-        .iter()
-        .map(|r| r["name"].as_str().unwrap_or(""))
-        .collect();
+    let names: Vec<&str> = records.iter().map(|r| r.name.as_str()).collect();
     assert!(names.contains(&"t6_Alpha One"), "got: {names:?}");
     assert!(names.contains(&"t6_Alpha Two"), "got: {names:?}");
     assert_eq!(records.len(), 2);
@@ -237,9 +242,9 @@ async fn test_scrape_companies_parses_address_fields() {
         .await
         .expect("scrape");
 
-    assert_eq!(records[0]["name"], "t7_Addr Co");
-    assert_eq!(records[0]["postcode"], "63000");
-    assert_eq!(records[0]["state"], "Selangor");
+    assert_eq!(records[0].name, "t7_Addr Co");
+    assert_eq!(records[0].postcode, "63000");
+    assert_eq!(records[0].state, "Selangor");
 }
 
 #[tokio::test]
@@ -275,21 +280,18 @@ async fn test_fetch_subcategory_mocked() {
         .await
         .expect("scrape");
 
-    let names: Vec<&str> = records
-        .iter()
-        .map(|r| r["name"].as_str().unwrap_or(""))
-        .collect();
+    let names: Vec<&str> = records.iter().map(|r| r.name.as_str()).collect();
     assert!(names.contains(&"t6_Biskut A"), "got: {names:?}");
     assert!(names.contains(&"t6_Biskut B"), "got: {names:?}");
     assert_eq!(records.len(), 2);
 
     let biscuit_a = records
         .iter()
-        .find(|r| r["name"] == "t6_Biskut A")
+        .find(|r| r.name == "t6_Biskut A")
         .expect("record");
-    assert_eq!(biscuit_a["brand"], "BrandA");
-    assert_eq!(biscuit_a["company"], "t6_Parent Co");
-    assert_eq!(biscuit_a["expiry_date"], "2026-12-31");
+    assert_eq!(biscuit_a.brand, "BrandA");
+    assert_eq!(biscuit_a.holder, "t6_Parent Co");
+    assert_eq!(biscuit_a.expiry_date, "2026-12-31");
 }
 
 #[tokio::test]
@@ -331,10 +333,7 @@ async fn test_fetch_subcategory_paginates_via_page_param() {
         .await
         .expect("scrape");
 
-    let names: Vec<&str> = records
-        .iter()
-        .map(|r| r["name"].as_str().unwrap_or(""))
-        .collect();
+    let names: Vec<&str> = records.iter().map(|r| r.name.as_str()).collect();
     assert!(names.contains(&"t6_Page One"), "got: {names:?}");
     assert!(names.contains(&"t6_Page Two"), "got: {names:?}");
     assert_eq!(records.len(), 2);

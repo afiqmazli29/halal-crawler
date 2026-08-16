@@ -1,12 +1,12 @@
 use scraper::{Html, Selector};
-use serde_json::json;
 
 use crate::constants::STATES;
+use crate::records::{Company, Product};
 
 /// Parse a directory search results page — extracts company-name and
-/// company-address spans into records with postcode and state derived
-/// from the address.
-pub fn parse_table(html: &str) -> Vec<serde_json::Value> {
+/// company-address spans into company records with postcode and state
+/// derived from the address.
+pub fn parse_table(html: &str) -> Vec<Company> {
     let document = Html::parse_document(html);
 
     let name_sel = Selector::parse("span.company-name").unwrap();
@@ -34,12 +34,12 @@ pub fn parse_table(html: &str) -> Vec<serde_json::Value> {
         let postcode = extract_postcode(&address);
         let state = extract_state(&address);
 
-        records.push(json!({
-            "name": name,
-            "address": address,
-            "postcode": postcode,
-            "state": state,
-        }));
+        records.push(Company {
+            name,
+            address,
+            postcode,
+            state,
+        });
     }
 
     records
@@ -48,7 +48,7 @@ pub fn parse_table(html: &str) -> Vec<serde_json::Value> {
 /// Parse a subcategory (product/premise) results page: each table row
 /// holds a name span, an optional JENAMA brand span, the certificate
 /// holder, and an expiry date cell.
-pub fn parse_product_table(html: &str) -> Vec<serde_json::Value> {
+pub fn parse_product_table(html: &str) -> Vec<Product> {
     let document = Html::parse_document(html);
 
     let row_sel = Selector::parse("tr").unwrap();
@@ -74,23 +74,23 @@ pub fn parse_product_table(html: &str) -> Vec<serde_json::Value> {
             .map(|el| el.text().collect::<String>())
             .map(|s| s.replace("JENAMA:", "").trim().to_string())
             .unwrap_or_default();
-        let company = row
+        let holder = row
             .select(&addr_sel)
             .next()
             .map(|el| el.text().collect::<String>().trim().to_string())
             .unwrap_or_default();
-        let expiry = row
+        let expiry_date = row
             .select(&expiry_sel)
             .next()
             .map(|el| el.text().collect::<String>().trim().to_string())
             .unwrap_or_default();
 
-        records.push(json!({
-            "name": name,
-            "brand": brand,
-            "company": company,
-            "expiry_date": expiry,
-        }));
+        records.push(Product {
+            name,
+            brand,
+            holder,
+            expiry_date,
+        });
     }
 
     records

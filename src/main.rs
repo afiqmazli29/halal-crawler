@@ -56,10 +56,7 @@ async fn main() -> Result<(), Error> {
     println!("╚══════════════════════════════════════════╝");
 
     println!("\n── Sample companies ──");
-    let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT name, phone_no FROM companies ORDER BY RANDOM() LIMIT 3")
-            .fetch_all(&pool)
-            .await?;
+    let rows = db::sample_companies(&pool).await?;
     for (name, phone) in &rows {
         println!("  {name} — {}", phone.as_str());
     }
