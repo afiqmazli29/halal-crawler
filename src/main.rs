@@ -40,13 +40,18 @@ async fn main() -> Result<(), Error> {
             s.category_code
         );
 
+        let log_id = db::start_scrap(&pool, s.category_code, "companies").await?;
         match listing::fetch_companies(&portal, s, max_pages).await {
             Ok(records) => {
-                let n = db::insert_companies(&pool, &records, s.category_code).await?;
-                total_companies += n;
-                println!("└─ {n} companies → DB");
+                let (inserted, updated) = db::insert_companies(&pool, &records).await?;
+                db::finish_scrap(&pool, log_id, inserted, updated).await?;
+                total_companies += inserted + updated;
+                println!("└─ {inserted} inserted, {updated} updated → DB");
             }
-            Err(e) => eprintln!("└─ ✗ {}", types::error_chain(&e)),
+            Err(e) => {
+                db::finish_scrap(&pool, log_id, 0, 0).await?;
+                eprintln!("└─ ✗ {}", types::error_chain(&e));
+            }
         }
     }
 
@@ -64,13 +69,19 @@ async fn main() -> Result<(), Error> {
             s.sub_name
         );
 
+        let log_id = db::start_scrap(&pool, s.category_code, "products").await?;
         match listing::fetch_subcategory(&portal, s, max_pages).await {
             Ok(records) => {
-                let n = db::insert_products(&pool, &records, s.category_code, s.sub_code).await?;
-                total_products += n;
-                println!("└─ {n} products → DB");
+                let (inserted, updated) =
+                    db::insert_products(&pool, &records, s.category_code, s.sub_code).await?;
+                db::finish_scrap(&pool, log_id, inserted, updated).await?;
+                total_products += inserted + updated;
+                println!("└─ {inserted} inserted, {updated} updated → DB");
             }
-            Err(e) => eprintln!("└─ ✗ {}", types::error_chain(&e)),
+            Err(e) => {
+                db::finish_scrap(&pool, log_id, 0, 0).await?;
+                eprintln!("└─ ✗ {}", types::error_chain(&e));
+            }
         }
     }
 

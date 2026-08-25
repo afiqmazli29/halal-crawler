@@ -36,10 +36,10 @@ async fn test_db_insert_and_query_companies() {
         Company::from_value(&json!({"nama_syarikat": names[1], "negeri": "KL"})),
     ];
 
-    let n = db::insert_companies(&ctx.pool, &records, "BG")
+    let (inserted, updated) = db::insert_companies(&ctx.pool, &records)
         .await
         .expect("insert");
-    assert_eq!(n, 2);
+    assert_eq!((inserted, updated), (2, 0));
 
     let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM companies WHERE name LIKE 't1_%'")
         .fetch_one(&ctx.pool)
@@ -67,7 +67,6 @@ async fn test_db_insert_and_query_products() {
         &[Company::from_value(
             &json!({"nama_syarikat": company_names[0]}),
         )],
-        "PR",
     )
     .await
     .unwrap();
@@ -82,10 +81,10 @@ async fn test_db_insert_and_query_products() {
         ),
     ];
 
-    let n = db::insert_products(&ctx.pool, &products, "PR", "PR")
+    let (inserted, updated) = db::insert_products(&ctx.pool, &products, "PR", "PR")
         .await
         .expect("insert");
-    assert_eq!(n, 2);
+    assert_eq!((inserted, updated), (2, 0));
 
     let (name, brand, expiry, holder): (String, String, String, String) =
         sqlx::query_as("SELECT name, brand, expiry_date, holder FROM products WHERE name LIKE 't2_%' ORDER BY name LIMIT 1")
@@ -104,15 +103,13 @@ async fn test_db_insert_and_query_products() {
 async fn test_db_insert_empty_returns_zero() {
     let ctx = common::setup_db().await;
 
-    let n = db::insert_companies(&ctx.pool, &[], "BG")
-        .await
-        .expect("ok");
-    assert_eq!(n, 0);
+    let (inserted, updated) = db::insert_companies(&ctx.pool, &[]).await.expect("ok");
+    assert_eq!((inserted, updated), (0, 0));
 
-    let n = db::insert_products(&ctx.pool, &[], "PR", "PR")
+    let (inserted, updated) = db::insert_products(&ctx.pool, &[], "PR", "PR")
         .await
         .expect("ok");
-    assert_eq!(n, 0);
+    assert_eq!((inserted, updated), (0, 0));
 }
 
 #[tokio::test]
@@ -123,15 +120,13 @@ async fn test_db_upsert_companies() {
     let first = vec![Company::from_value(
         &json!({"nama_syarikat": names[0], "state": "KL"}),
     )];
-    db::insert_companies(&ctx.pool, &first, "BG").await.unwrap();
+    db::insert_companies(&ctx.pool, &first).await.unwrap();
 
     let second = vec![Company::from_value(
         &json!({"nama_syarikat": names[0], "state": "Selangor"}),
     )];
-    let n = db::insert_companies(&ctx.pool, &second, "BG")
-        .await
-        .unwrap();
-    assert_eq!(n, 1);
+    let (inserted, updated) = db::insert_companies(&ctx.pool, &second).await.unwrap();
+    assert_eq!((inserted, updated), (0, 1));
 
     let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM companies WHERE name LIKE 't4_%'")
         .fetch_one(&ctx.pool)
@@ -145,6 +140,40 @@ async fn test_db_upsert_companies() {
         .await
         .unwrap();
     assert_eq!(state, "Selangor");
+
+    common::cleanup(&ctx.pool, names, &[]).await;
+}
+
+#[tokio::test]
+async fn test_db_scrap_log_records_inserts() {
+    let ctx = common::setup_db().await;
+
+    let log_id = db::start_scrap(&ctx.pool, "BG", "companies")
+        .await
+        .expect("start");
+
+    let names = &["tSL_Co A", "tSL_Co B"];
+    let records = vec![
+        Company::from_value(&json!({"nama_syarikat": names[0]})),
+        Company::from_value(&json!({"nama_syarikat": names[1]})),
+    ];
+    let (inserted, updated) = db::insert_companies(&ctx.pool, &records)
+        .await
+        .expect("insert");
+    db::finish_scrap(&ctx.pool, log_id, inserted, updated)
+        .await
+        .expect("finish");
+
+    let (phase, ins, upd, finished): (String, i32, i32, bool) = sqlx::query_as(
+        "SELECT phase, inserted_count, updated_count, finished_at IS NOT NULL
+         FROM scrap_log WHERE id = $1",
+    )
+    .bind(log_id)
+    .fetch_one(&ctx.pool)
+    .await
+    .expect("log row");
+    assert_eq!(phase, "companies");
+    assert_eq!((ins, upd, finished), (2, 0, true));
 
     common::cleanup(&ctx.pool, names, &[]).await;
 }

@@ -29,12 +29,11 @@ Override it via the `DATABASE_URL` environment variable.
 
 ### Schema
 
-**`companies`**
+**`companies`** — company data only (no category or scrape timing; those live in `scrap_log`).
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | `SERIAL PK` | Auto-increment ID |
-| `category_code` | `TEXT` | e.g. `BG`, `FM` |
 | `name` | `TEXT` | Company name |
 | `address` | `TEXT` | Full address |
 | `postcode` | `TEXT` | Postcode parsed from the address |
@@ -45,9 +44,11 @@ Override it via the `DATABASE_URL` environment variable.
 | `website` | `TEXT` | Website URL (not yet scraped) |
 | `reference_no` | `TEXT` | Halal reference number (not yet scraped) |
 | `officer` | `TEXT` | Responsible officer (not yet scraped) |
-| `scraped_at` | `TIMESTAMPTZ` | Timestamp of scrape |
+| `created_at` | `TIMESTAMPTZ` | When the row was first inserted |
+| `updated_at` | `TIMESTAMPTZ` | When the row was last updated |
 
-Unique on `(category_code, name)`.
+Unique on `(name)` — a company appearing in multiple categories collapses into
+one row.
 
 **`products`**
 
@@ -61,9 +62,24 @@ Unique on `(category_code, name)`.
 | `subcategory_code` | `TEXT` | Subcategory code |
 | `company_id` | `INTEGER` | FK → `companies.id` |
 | `expiry_date` | `TEXT` | Halal expiry date |
-| `scraped_at` | `TIMESTAMPTZ` | Timestamp of scrape |
+| `created_at` | `TIMESTAMPTZ` | When the row was first inserted |
+| `updated_at` | `TIMESTAMPTZ` | When the row was last updated |
 
 Unique on `(category_code, subcategory_code, name, brand)`.
+
+**`scrap_log`** — records each scrape run generally (not per company/product
+row).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | `SERIAL PK` | Auto-increment ID |
+| `category_code` | `TEXT` | Category crawled (e.g. `BG`, `PR`) |
+| `phase` | `TEXT` | `companies` or `products` |
+| `started_at` | `TIMESTAMPTZ` | When the crawl started |
+| `finished_at` | `TIMESTAMPTZ` | When the crawl finished (NULL until done) |
+| `inserted_count` | `INT` | Rows inserted |
+| `updated_count` | `INT` | Rows updated |
+
 
 ## Categories scraped
 
