@@ -61,20 +61,73 @@ fn flush_line(lines: &mut Vec<String>, buf: &mut String) {
     }
 }
 
+/// Extract the `comp_code` from an `onclick="openModal(...)"` attribute.
+/// The portal emits: onclick="openModal('directory/slm_viewdetail.php?comp_code=COMP-20230804-130326&type=C', ...)"
+/// Returns just the `COMP-20230804-130326` part, or empty string if not found.
+fn extract_comp_code(onclick: &str) -> String {
+    if let Some(start) = onclick.find("comp_code=") {
+        let rest = &onclick[start + "comp_code=".len()..];
+        let end = rest
+            .find('&')
+            .or_else(|| rest.find('\''))
+            .unwrap_or(rest.len());
+        return rest[..end].to_string();
+    }
+    String::new()
+}
+
 /// Parse a directory search results page — extracts company-name and
 /// company-address spans into company records with postcode and state
-/// derived from the address.
+/// derived from the address. Also extracts the `comp_code` from the row's
+/// `onclick` handler so the company's modal detail page can be fetched later.
 pub fn parse_table(html: &str) -> Vec<Company> {
     let document = Html::parse_document(html);
 
     let name_sel = Selector::parse("span.company-name").unwrap();
     let addr_sel = Selector::parse("span.company-address").unwrap();
+    let row_sel = Selector::parse("tr.cursor-pointer").unwrap();
 
+    // Preferred path: portal listing rows carry the modal onclick with the
+    // company's comp_code. Parse per-row so name/address/comp_code stay paired.
+    let rows: Vec<_> = document.select(&row_sel).collect();
+    if !rows.is_empty() {
+        let mut records = Vec::new();
+        for row in &rows {
+            let Some(name_el) = row.select(&name_sel).next() else {
+                continue;
+            };
+            let name = element_text(&name_el);
+            if name.is_empty() {
+                continue;
+            }
+            let address = row
+                .select(&addr_sel)
+                .next()
+                .map(|el| element_text(&el))
+                .unwrap_or_default();
+            let comp_code = row
+                .value()
+                .attr("onclick")
+                .map(|oc| extract_comp_code(oc))
+                .unwrap_or_default();
+
+            records.push(Company {
+                name,
+                postcode: extract_postcode(&address),
+                state: extract_state(&address),
+                address,
+                comp_code,
+                ..Default::default()
+            });
+        }
+        return records;
+    }
+
+    // Fallback: bare name/address spans (older fixture shape, no modals).
     let names: Vec<String> = document
         .select(&name_sel)
         .map(|el| element_text(&el))
         .collect();
-
     let addresses: Vec<String> = document
         .select(&addr_sel)
         .map(|el| element_text(&el))
@@ -89,14 +142,13 @@ pub fn parse_table(html: &str) -> Vec<Company> {
             continue;
         }
         let address = addresses.get(i).cloned().unwrap_or_default();
-        let postcode = extract_postcode(&address);
-        let state = extract_state(&address);
 
         records.push(Company {
             name,
+            postcode: extract_postcode(&address),
+            state: extract_state(&address),
             address,
-            postcode,
-            state,
+            ..Default::default()
         });
     }
 
@@ -215,4 +267,97 @@ fn extract_state(addr: &str) -> String {
     }
 
     String::new()
+}
+
+/// Parse a company's modal detail page (`/directory/slm_viewdetail.php`),
+/// returning enriched company fields and the product list under
+/// "Product / Menu List".
+pub fn parse_modal(html: &str) -> (Company, Vec<Product>) {
+    let document = Html::parse_document(html);
+
+    let tr_sel = Selector::parse("tr").unwrap();
+    let txt_sel = Selector::parse("td.txt").unwrap();
+    let center_td_sel = Selector::parse("td[align=center]").unwrap();
+
+    let mut company = Company::default();
+    let mut in_product_section = false;
+    let mut products = Vec::new();
+
+    for row in document.select(&tr_sel) {
+        let tds: Vec<ElementRef> = row.select(&Selector::parse("td").unwrap()).collect();
+
+        // Company detail rows: <tr><td><b><div align="right">Label :</div></b></td><td>value</td></tr>
+        if tds.len() >= 2 {
+            let label = tds[0]
+                .select(&Selector::parse("div[align=right]").unwrap())
+                .next()
+                .map(|el| el.text().collect::<String>().trim().to_lowercase())
+                .unwrap_or_default();
+
+            if !label.is_empty() {
+                let value = element_text(&tds[1]);
+                match label.as_str() {
+                    s if s.contains("name :") => company.name = value,
+                    s if s.contains("address :") => {
+                        company.address = element_text(&tds[1]);
+                        company.postcode = extract_postcode(&company.address);
+                        company.state = extract_state(&company.address);
+                    }
+                    s if s.contains("state :") => {
+                        if !value.is_empty() && company.state.is_empty() {
+                            company.state = value;
+                        }
+                    }
+                    s if s.contains("phone no :") => company.phone_no = value,
+                    s if s.contains("fax no") => company.fax_no = value,
+                    s if s.contains("e-mail") => company.email = value,
+                    s if s.contains("website") => company.website = value,
+                    s if s.contains("reference no") => company.reference_no = value,
+                    s if s.contains("officer") => company.officer = element_text(&tds[1]),
+                    _ => {}
+                }
+                continue;
+            }
+        }
+
+        // Check for product section header
+        if tds.len() >= 1 {
+            let text = tds[0].text().collect::<String>().to_lowercase();
+            if text.contains("product / menu list") {
+                in_product_section = true;
+                continue;
+            }
+        }
+
+        // Product rows: <tr> with <td class="txt"> cells
+        if in_product_section {
+            let txt_cells: Vec<ElementRef> = row.select(&txt_sel).collect();
+            if txt_cells.len() >= 2 {
+                let product_name = element_text(&txt_cells[0]);
+                let holder = element_text(&txt_cells[1]);
+
+                // Expiry lives in a <td align="center"> that is NOT the row
+                // number — it contains a dd/mm/yyyy pattern.
+                let expiry = row
+                    .select(&center_td_sel)
+                    .find(|el| {
+                        let t = el.text().collect::<String>();
+                        t.matches('/').count() == 2 && !t.trim().is_empty()
+                    })
+                    .map(|el| element_text(&el))
+                    .unwrap_or_default();
+
+                if !product_name.is_empty() {
+                    products.push(Product {
+                        name: product_name,
+                        brand: String::new(),
+                        holder,
+                        expiry_date: expiry,
+                    });
+                }
+            }
+        }
+    }
+
+    (company, products)
 }

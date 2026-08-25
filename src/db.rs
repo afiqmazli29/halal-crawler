@@ -22,6 +22,7 @@ pub async fn init(db_url: &str) -> Result<PgPool, Error> {
             website TEXT,
             reference_no TEXT,
             officer TEXT,
+            comp_code TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             UNIQUE(name)
@@ -31,7 +32,7 @@ pub async fn init(db_url: &str) -> Result<PgPool, Error> {
     .await?;
 
     // Migrate: add columns that may be missing from older schema
-    for col in ["postcode"] {
+    for col in ["postcode", "comp_code"] {
         sqlx::query(&format!(
             "ALTER TABLE companies ADD COLUMN IF NOT EXISTS {col} TEXT"
         ))
@@ -161,8 +162,9 @@ pub async fn finish_scrap(
 }
 
 /// Upsert companies. `companies` has no category, so uniqueness is by `name`
-/// alone. Returns `(inserted, updated)` per record via the Postgres `xmax = 0`
-/// insert-detection trick.
+/// alone. All modal-enriched fields (phone, fax, email, …) are persisted;
+/// empty values never clobber existing non-empty ones. Returns
+/// `(inserted, updated)` per record via the Postgres `xmax = 0` trick.
 pub async fn insert_companies(pool: &PgPool, records: &[Company]) -> Result<(usize, usize), Error> {
     if records.is_empty() {
         return Ok((0, 0));
@@ -173,12 +175,21 @@ pub async fn insert_companies(pool: &PgPool, records: &[Company]) -> Result<(usi
     for r in records {
         let (is_ins,): (bool,) = sqlx::query_as(
             "WITH ins AS (
-                INSERT INTO companies (name, address, postcode, state)
-                VALUES ($1, $2, $3, $4)
+                INSERT INTO companies (name, address, postcode, state,
+                                       phone_no, fax_no, email, website,
+                                       reference_no, officer, comp_code)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                 ON CONFLICT(name) DO UPDATE SET
-                    address = excluded.address,
-                    postcode = excluded.postcode,
-                    state = excluded.state,
+                    address = CASE WHEN excluded.address <> '' THEN excluded.address ELSE companies.address END,
+                    postcode = CASE WHEN excluded.postcode <> '' THEN excluded.postcode ELSE companies.postcode END,
+                    state = CASE WHEN excluded.state <> '' THEN excluded.state ELSE companies.state END,
+                    phone_no = CASE WHEN excluded.phone_no <> '' THEN excluded.phone_no ELSE companies.phone_no END,
+                    fax_no = CASE WHEN excluded.fax_no <> '' THEN excluded.fax_no ELSE companies.fax_no END,
+                    email = CASE WHEN excluded.email <> '' THEN excluded.email ELSE companies.email END,
+                    website = CASE WHEN excluded.website <> '' THEN excluded.website ELSE companies.website END,
+                    reference_no = CASE WHEN excluded.reference_no <> '' THEN excluded.reference_no ELSE companies.reference_no END,
+                    officer = CASE WHEN excluded.officer <> '' THEN excluded.officer ELSE companies.officer END,
+                    comp_code = CASE WHEN excluded.comp_code <> '' THEN excluded.comp_code ELSE companies.comp_code END,
                     updated_at = NOW()
                 RETURNING (xmax = 0) AS inserted
              )
@@ -188,6 +199,13 @@ pub async fn insert_companies(pool: &PgPool, records: &[Company]) -> Result<(usi
         .bind(&r.address)
         .bind(&r.postcode)
         .bind(&r.state)
+        .bind(&r.phone_no)
+        .bind(&r.fax_no)
+        .bind(&r.email)
+        .bind(&r.website)
+        .bind(&r.reference_no)
+        .bind(&r.officer)
+        .bind(&r.comp_code)
         .fetch_one(&mut *tx)
         .await?;
         if is_ins {

@@ -409,3 +409,118 @@ async fn test_fetch_subcategory_no_records_returns_empty() {
         .expect("scrape");
     assert_eq!(records.len(), 0);
 }
+
+// ── Modal detail fetching (httpmock, no database) ────────────────
+
+#[tokio::test]
+async fn test_fetch_company_modals_enriches_and_returns_products() {
+    let ctx = common::setup_mock().await;
+
+    // The modal endpoint: company detail + product list in the live shape.
+    ctx.server.mock(|when, then| {
+        when.method(GET)
+            .path("/directory/slm_viewdetail.php")
+            .query_param("comp_code", "COMP-20230804-000001");
+        then.status(200).header("content-type", "text/html").body(
+            "<html><body><table>\
+                 <tr><td><b><div align=\"right\">Name :</div></b></td>\
+                 <td>tM_Enriched Co</td></tr>\
+                 <tr><td><b><div align=\"right\">Phone No :</div></b></td>\
+                 <td>03-1234567</td></tr>\
+                 <tr><td><b><div align=\"right\">e-mail :</div></b></td>\
+                 <td>a@b.example</td></tr>\
+                 <tr><td colspan=\"2\"><b>Product / Menu List :</b>\
+                 <table border=\"1\">\
+                 <tr><td align=\"center\">1.</td>\
+                 <td class=\"txt\">HK1 TEST PRODUCT A</td>\
+                 <td class=\"txt\">tM_Enriched Co</td>\
+                 <td align=\"center\">15/07/2029</td></tr>\
+                 </table></td></tr>\
+                 </table></body></html>",
+        );
+    });
+
+    let companies = vec![Company::from_value(&json!({
+        "nama_syarikat": "tM_Listing Co",
+        "alamat": "1 Jalan, 50000 KL, Kuala Lumpur",
+        "comp_code": "COMP-20230804-000001",
+    }))];
+
+    let entries = listing::fetch_company_modals(&ctx.portal, &companies, 2)
+        .await
+        .expect("modals");
+
+    assert_eq!(entries.len(), 1);
+    let (company, products) = &entries[0];
+    // Enriched fields came from the modal
+    assert_eq!(company.name, "tM_Enriched Co");
+    assert_eq!(company.phone_no, "03-1234567");
+    assert_eq!(company.email, "a@b.example");
+    // Fields missing from the modal fall back to the listing values
+    assert_eq!(company.address, "1 Jalan, 50000 KL, Kuala Lumpur");
+    assert_eq!(company.comp_code, "COMP-20230804-000001");
+    // Products were parsed from the modal's Product / Menu List
+    assert_eq!(products.len(), 1);
+    assert_eq!(products[0].name, "HK1 TEST PRODUCT A");
+    assert_eq!(products[0].expiry_date, "15/07/2029");
+}
+
+#[tokio::test]
+async fn test_fetch_company_modals_skips_companies_without_comp_code() {
+    let ctx = common::setup_mock().await;
+
+    let companies = vec![Company::from_value(&json!({
+        "nama_syarikat": "tM_NoModal Co",
+    }))];
+
+    let entries = listing::fetch_company_modals(&ctx.portal, &companies, 2)
+        .await
+        .expect("modals");
+
+    assert_eq!(entries.len(), 1);
+    let (company, products) = &entries[0];
+    assert_eq!(company.name, "tM_NoModal Co");
+    assert_eq!(company.phone_no, "");
+    assert!(products.is_empty());
+}
+
+// ── DB persistence of enriched fields (needs live PostgreSQL) ────
+
+#[tokio::test]
+async fn test_db_persists_modal_enriched_fields() {
+    let ctx = common::setup_db().await;
+
+    let name = "tDB_Enriched Co";
+    let enriched = vec![halal_crawler::records::Company {
+        name: name.to_string(),
+        address: "99 Jalan Uji, 43650 Bangi, Selangor".to_string(),
+        postcode: "43650".to_string(),
+        state: "Selangor".to_string(),
+        phone_no: "03-9876543".to_string(),
+        fax_no: String::new(),
+        email: "x@y.example".to_string(),
+        website: String::new(),
+        reference_no: "JAKIM.700-1/1/1 100-1/2025".to_string(),
+        officer: "Officer A".to_string(),
+        comp_code: "COMP-20240101-999999".to_string(),
+    }];
+
+    let (inserted, updated) = halal_crawler::db::insert_companies(&ctx.pool, &enriched)
+        .await
+        .unwrap();
+    assert_eq!((inserted, updated), (1, 0));
+
+    let (phone, email, ref_no, comp): (String, String, String, String) = sqlx::query_as(
+        "SELECT phone_no, email, reference_no, comp_code FROM companies WHERE name = $1",
+    )
+    .bind(name)
+    .fetch_one(&ctx.pool)
+    .await
+    .unwrap();
+    assert_eq!(phone, "03-9876543");
+    assert_eq!(email, "x@y.example");
+    assert_eq!(ref_no, "JAKIM.700-1/1/1 100-1/2025");
+    assert_eq!(comp, "COMP-20240101-999999");
+
+    common::cleanup(&ctx.pool, &[name], &[]).await;
+}

@@ -1,23 +1,35 @@
 use serde_json::Value;
 
-/// A company listing record. The from_value adapter owns the portal's
+/// A company record. The `from_value` adapter owns the portal's
 /// Malay+English key variants so callers never learn them.
+/// `comp_code` is scraped from the directory listing (the `onclick` link);
+/// the remaining fields are fetched from the company's modal detail page.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Company {
     pub name: String,
     pub address: String,
     pub postcode: String,
     pub state: String,
+    pub phone_no: String,
+    pub fax_no: String,
+    pub email: String,
+    pub website: String,
+    pub reference_no: String,
+    pub officer: String,
+    pub comp_code: String,
 }
 
 impl Company {
-    /// Map a raw JSON record, trying Malay keys first, then English.
+    /// Map a listing-page record (just name + address + comp_code).
+    /// The remaining fields are filled in from the modal detail page.
     pub fn from_value(v: &Value) -> Self {
         Company {
             name: pick_str(v, &["nama_syarikat", "name", "company_name", "nama"]),
             address: pick_str(v, &["alamat", "address"]),
             postcode: pick_str(v, &["postcode", "poskod"]),
             state: pick_str(v, &["negeri", "state"]),
+            comp_code: pick_str(v, &["comp_code"]),
+            ..Default::default()
         }
     }
 }

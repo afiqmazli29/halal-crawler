@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 use tokio::task::JoinSet;
 
 use crate::parser;
@@ -46,6 +47,92 @@ pub async fn fetch_subcategory(
 ) -> Result<Vec<Product>, Error> {
     crawl(portal, strategy, max_pages, parser::parse_product_table).await
 }
+
+/// Fetch the modal detail page for a single company by comp_code.
+/// Returns the URL that would be used (for mock matching in tests).
+pub fn modal_url(base: &str, comp_code: &str) -> String {
+    format!(
+        "{}/directory/slm_viewdetail.php?comp_code={}&type=C",
+        base.trim_end_matches('/'),
+        comp_code
+    )
+}
+
+/// Fetch and parse modal detail pages for a batch of companies concurrently.
+/// Each company's `comp_code` is used to fetch its modal page, which returns
+/// enriched company data (phone, fax, email, website, etc.) and products.
+/// Products are returned with the category/subcategory appended to their
+/// `holder` for traceability (or you can attach them separately).
+///
+/// Companies without a comp_code are skipped (left unchanged).
+///
+/// `max_concurrent` caps the number of simultaneous modal fetches.
+pub async fn fetch_company_modals(
+    portal: &Portal,
+    companies: &[Company],
+    max_concurrent: usize,
+) -> Result<Vec<(Company, Vec<Product>)>, Error> {
+    let sem = semaphore(max_concurrent);
+
+    let mut set = JoinSet::new();
+
+    for company in companies {
+        if company.comp_code.is_empty() {
+            // No modal — carry through what we already have from the listing
+            let company = company.clone();
+            set.spawn(async move { Ok((company, Vec::new())) });
+            continue;
+        }
+
+        let portal = Portal::clone(portal);
+        let url = modal_url(portal.base(), &company.comp_code);
+        let _sem = sem.clone();
+        let company = company.clone();
+
+        set.spawn(async move {
+            let _permit = _sem.acquire().await?;
+            let html = portal.get(&url).await?;
+            let (mut modal_company, products) = parser::parse_modal(&html);
+
+            // Merge: keep the comp_code we already have, fill in modal fields
+            if modal_company.name.is_empty() {
+                modal_company.name = company.name.clone();
+            }
+            if modal_company.address.is_empty() {
+                modal_company.address = company.address.clone();
+            }
+            if modal_company.postcode.is_empty() {
+                modal_company.postcode = company.postcode.clone();
+            }
+            if modal_company.state.is_empty() {
+                modal_company.state = company.state.clone();
+            }
+            if modal_company.comp_code.is_empty() {
+                modal_company.comp_code = company.comp_code.clone();
+            }
+
+            Ok::<_, Error>((modal_company, products))
+        });
+    }
+
+    let mut all = Vec::new();
+    while let Some(result) = set.join_next().await {
+        match result? {
+            Ok(entry) => all.push(entry),
+            Err(e) => eprintln!("│    ✗ modal fetch failed: {}", error_chain(&e)),
+        }
+    }
+
+    Ok(all)
+}
+
+/// A simple semaphore type alias to keep things readable.
+fn semaphore(n: usize) -> Arc<tokio::sync::Semaphore> {
+    Arc::new(tokio::sync::Semaphore::new(n))
+}
+
+/// The shared crawl: one task per letter, each letter paginating from
+/// page 1 to the total announced by the portal on page 1.
 
 /// The shared crawl: one task per letter, each letter paginating from
 /// page 1 to the total announced by the portal on page 1.

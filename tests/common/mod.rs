@@ -63,18 +63,27 @@ pub async fn cleanup(pool: &PgPool, company_names: &[&str], product_names: &[&st
     }
 }
 
-/// A directory search response: span-based listing plus the portal's
+/// A directory search response: one `<tr class="cursor-pointer">` per company
+/// (with an `onclick` modal link carrying its comp_code), plus the portal's
 /// "Total Record … From N" line that announces the total page count.
 pub fn listing_html(records: &[(&str, &str)], total_pages: u32) -> String {
-    let mut spans = String::new();
-    for (name, address) in records {
-        spans.push_str(&format!(
-            "<span class=\"company-name\">{name}</span>\n\
-             <span class=\"company-address\">{address}</span>\n"
+    let mut rows = String::new();
+    for (i, (name, address)) in records.iter().enumerate() {
+        rows.push_str(&format!(
+            "<tr class=\"border-b cursor-pointer\" onclick=\"openModal('directory/slm_viewdetail.php?comp_code=COMP-20230804-{:06}&type=C', 'Maklumat Sijil Halal');\">\n\
+             <td class=\"text-center font-semibold\">{}</td>\n\
+             <td>\n\
+             <span class=\"company-name\">{name}</span><br>\n\
+             <span class=\"company-address\">{address}</span>\n\
+             </td>\n\
+             <td class=\"text-center py-6\">01/01/2030</td>\n\
+             </tr>\n",
+            i + 1,
+            i + 1
         ));
     }
     let total_pages_line = format!("Total Record : 955 - Page 1 From {total_pages}");
-    format!("<html><body>\n{total_pages_line}\n{spans}</body></html>")
+    format!("<html><body>\n{total_pages_line}\n<table>\n{rows}</table>\n</body></html>")
 }
 
 /// A product/premise listing page in the portal's table-row shape:

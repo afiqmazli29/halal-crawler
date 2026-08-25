@@ -15,7 +15,13 @@ Requires Rust 1.85+ (edition 2024) and a running PostgreSQL instance.
 
 1. Seed a PHP session on the portal.
 2. For each category, search each letter `a`–`z`: company listings (`ty=CO`) paginate via the `hdnCounter` the portal echoes; subcategory listings (products, premises, …) advance on the page parameter using the total-page count from page one.
-3. Insert the records into the `companies` and `products` tables, then print a few sample rows.
+3. Each company row in the listing carries an `onclick="openModal('directory/slm_viewdetail.php?comp_code=…', …)"` link. The `comp_code` is extracted, and each company's modal detail page (`/directory/slm_viewdetail.php?comp_code=…&type=C`) is fetched concurrently to enrich the company record (phone, fax, e-mail, website, reference no., officer) and scrape its **Product / Menu List**.
+4. Insert the records into the `companies`, `products`, and `product_categories` tables, then print a few sample rows.
+
+The modal parsing currently targets the detail-page layout used by Barang
+Gunaan, Farmaseutikal, International, Kosmetik & Dandanan Diri, Peranti
+Perubatan, and Produk Makanan/Minuman. Other categories' modal layouts may
+differ and need separate handling.
 
 ## Database
 
@@ -42,13 +48,14 @@ Override it via the `DATABASE_URL` environment variable.
 | `fax_no` | `TEXT` | Fax number (not yet scraped) |
 | `email` | `TEXT` | Email (not yet scraped) |
 | `website` | `TEXT` | Website URL (not yet scraped) |
-| `reference_no` | `TEXT` | Halal reference number (not yet scraped) |
-| `officer` | `TEXT` | Responsible officer (not yet scraped) |
+| `reference_no` | `TEXT` | Halal reference number |
+| `officer` | `TEXT` | Responsible officer(s) (`<br>`-joined with `, `) |
+| `comp_code` | `TEXT` | Portal company code from the listing's modal link |
 | `created_at` | `TIMESTAMPTZ` | When the row was first inserted |
 | `updated_at` | `TIMESTAMPTZ` | When the row was last updated |
 
 Unique on `(name)` — a company appearing in multiple categories collapses into
-one row.
+one row. On upsert, empty values never clobber existing non-empty ones.
 
 **`products`**
 

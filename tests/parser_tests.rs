@@ -1,4 +1,4 @@
-use halal_crawler::parser::{extract_total_pages, parse_product_table, parse_table};
+use halal_crawler::parser::{extract_total_pages, parse_modal, parse_product_table, parse_table};
 
 // ── extract_total_pages ────────────────────────────────────────
 
@@ -206,4 +206,110 @@ fn test_parse_product_table_empty_brand() {
 #[test]
 fn test_parse_product_table_no_rows() {
     assert_eq!(parse_product_table("<table></table>").len(), 0);
+}
+
+// ── comp_code extraction from the listing rows ──────────────────────
+
+#[test]
+fn test_parse_table_extracts_comp_codes() {
+    let html = format!(
+        "<html><body><table>\
+         <tr class=\"cursor-pointer\" onclick=\"openModal('directory/slm_viewdetail.php?comp_code=COMP-20230804-130326&type=C', 'Maklumat Sijil Halal');\">\
+         <td><span class=\"company-name\">CPL Aromas (Malaysia) Sdn. Bhd.</span>\
+         <span class=\"company-address\">Lot 126, 42920 Pelabuhan Klang, Selangor</span></td></tr>\
+         </table></body></html>"
+    );
+    let records = parse_table(&html);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].comp_code, "COMP-20230804-130326");
+}
+
+#[test]
+fn test_parse_table_missing_onclick_gives_empty_comp_code() {
+    let html = "<html><body><table>\
+         <tr class=\"cursor-pointer\">\
+         <td><span class=\"company-name\">No Modal Co</span>\
+         <span class=\"company-address\">1 Jalan, 50000 KL, Kuala Lumpur</span></td></tr>\
+         </table></body></html>";
+    let records = parse_table(html);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].comp_code, "");
+}
+
+// ── modal detail page parsing ───────────────────────────────────────
+
+/// A minimal modal page in the live portal's shape: label/value rows
+/// followed by the Product / Menu List table.
+fn modal_html() -> String {
+    String::from(
+        "<html><body><table>\
+         <tr><td width=\"25%\"><b><div align=\"right\">Name :</div></b></td>\
+         <td>CPL Aromas (Malaysia) Sdn. Bhd.</td></tr>\
+         <tr><td><b><div align=\"right\">Address :</div></b></td>\
+         <td>No. Lot 126 Jalan Sungai Pinang <br>Taman Perindustrian <br>42920, Pelabuhan Klang<br>Selangor</td></tr>\
+         <tr><td><b><div align=\"right\">State :</div></b></td><td>Selangor</td></tr>\
+         <tr><td><b><div align=\"right\">Phone No :</div></b></td><td>0331617111</td></tr>\
+         <tr><td><b><div align=\"right\">Fax No. :</div></b></td><td></td></tr>\
+         <tr><td><b><div align=\"right\">e-mail :</div></b></td><td>haziq@example.com</td></tr>\
+         <tr><td><b><div align=\"right\">Website :</div></b></td><td></td></tr>\
+         <tr><td><b><div align=\"right\">Reference No. :</div></b></td><td>JAKIM.700-2/3/6 070-11/2023</td></tr>\
+         <tr><td><b><div align=\"right\">Officer :</div></b></td><td>Mohammad Saharin Bin Mat Yusof<br>Amirul Bin Sahadad</td></tr>\
+         <tr><td colspan=\"2\"><b>Product / Menu List :</b>\
+         <table width=\"100%\" border=\"1\">\
+         <tr bgcolor=\"#00CCCC\"><td><b>No.</b></td><td><b>Product</b></td><td><b>Brand</b></td><td><b>Expiry Date</b></td></tr>\
+         <tr><td align=\"center\">1.</td>\
+         <td class=\"txt\">HK314634 MALICE AF (CONCENTRATED FRAGRANCE)</td>\
+         <td class=\"txt\">CPL AROMAS (MALAYSIA) SDN. BHD.</td>\
+         <td align=\"center\">15/07/2029</td></tr>\
+         <tr><td align=\"center\">2.</td>\
+         <td class=\"txt\">SP163825 BLACK OUD AP (CONCENTRATED FRAGRANCE)</td>\
+         <td class=\"txt\">CPL AROMAS (MALAYSIA) SDN BHD</td>\
+         <td align=\"center\">30/09/2028</td></tr>\
+         </table></td></tr>\
+         </table></body></html>",
+    )
+}
+
+#[test]
+fn test_parse_modal_company_fields() {
+    let (company, _products) = parse_modal(&modal_html());
+    assert_eq!(company.name, "CPL Aromas (Malaysia) Sdn. Bhd.");
+    assert!(!company.address.is_empty());
+    assert_eq!(company.postcode, "42920");
+    assert_eq!(company.state, "Selangor");
+    assert_eq!(company.phone_no, "0331617111");
+    // Empty fax stays empty
+    assert_eq!(company.fax_no, "");
+    assert_eq!(company.email, "haziq@example.com");
+    assert_eq!(company.website, "");
+    assert_eq!(company.reference_no, "JAKIM.700-2/3/6 070-11/2023");
+    // Officers are <br>-joined with ", "
+    assert!(
+        company.officer.contains("Mohammad Saharin Bin Mat Yusof")
+            && company.officer.contains("Amirul Bin Sahadad"),
+        "officer: {:?}",
+        company.officer
+    );
+}
+
+#[test]
+fn test_parse_modal_products() {
+    let (_, products) = parse_modal(&modal_html());
+    assert_eq!(products.len(), 2);
+
+    assert_eq!(
+        products[0].name,
+        "HK314634 MALICE AF (CONCENTRATED FRAGRANCE)"
+    );
+    assert_eq!(products[0].holder, "CPL AROMAS (MALAYSIA) SDN. BHD.");
+    assert_eq!(products[0].expiry_date, "15/07/2029");
+
+    assert_eq!(products[1].expiry_date, "30/09/2028");
+}
+
+#[test]
+fn test_parse_modal_empty_html() {
+    let (company, products) = parse_modal("<html><body></body></html>");
+    assert_eq!(company.name, "");
+    assert!(products.is_empty());
 }
