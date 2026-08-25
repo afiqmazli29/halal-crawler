@@ -54,13 +54,11 @@ pub async fn init(db_url: &str) -> Result<PgPool, Error> {
             name TEXT NOT NULL,
             brand TEXT,
             holder TEXT,
-            category_code TEXT NOT NULL,
-            subcategory_code TEXT NOT NULL,
             company_id INTEGER REFERENCES companies(id),
             expiry_date TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            UNIQUE(category_code, subcategory_code, name, brand)
+            UNIQUE(company_id, name, brand)
         )",
     )
     .execute(&pool)
@@ -82,6 +80,31 @@ pub async fn init(db_url: &str) -> Result<PgPool, Error> {
         .await
         .ok();
     }
+
+    // Migrate: drop old products columns if they exist (moved to product_categories).
+    // The syntax "DROP COLUMN IF EXISTS col" (without type) works in PostgreSQL 9.4+.
+    for col in ["category_code", "subcategory_code", "scraped_at"] {
+        sqlx::query(&format!("ALTER TABLE products DROP COLUMN IF EXISTS {col}"))
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    // `product_categories` maps each product to the (category, subcategory) it
+    // was seen in. A product is unique by (company_id, name, brand); the mapping
+    // table allows many-to-many: one product can appear in multiple categories,
+    // and one category can contain many products.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS product_categories (
+            product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+            category_code TEXT NOT NULL,
+            subcategory_code TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (product_id, category_code, subcategory_code)
+        )",
+    )
+    .execute(&pool)
+    .await?;
 
     // `scrap_log` records scrape runs generally: which category+phase was
     // crawled, when it ran, and how many rows were inserted/updated. It does
@@ -177,7 +200,10 @@ pub async fn insert_companies(pool: &PgPool, records: &[Company]) -> Result<(usi
     Ok((inserted, updated))
 }
 
-/// Upsert products. Returns `(inserted, updated)`.
+/// Upsert products. The product's `holder` is resolved to a `company_id`
+/// via the companies table (matching by name). Each product is then linked
+/// to its (category_code, subcategory_code) via the `product_categories`
+/// mapping table. Returns `(inserted, updated)` product rows.
 pub async fn insert_products(
     pool: &PgPool,
     records: &[Product],
@@ -190,33 +216,55 @@ pub async fn insert_products(
     let mut tx = pool.begin().await?;
     let mut inserted = 0usize;
     let mut updated = 0usize;
+
     for r in records {
-        let (is_ins,): (bool,) = sqlx::query_as(
+        // Resolve the holder (company name) to a company_id.
+        let company_id: Option<i32> =
+            sqlx::query_scalar("SELECT id FROM companies WHERE name = $1")
+                .bind(&r.holder)
+                .fetch_optional(&mut *tx)
+                .await?;
+
+        // Upsert the product by (company_id, name, brand).
+        let (product_id, is_ins): (i32, bool) = sqlx::query_as(
             "WITH ins AS (
-                INSERT INTO products (name, brand, holder, category_code, subcategory_code, expiry_date)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                ON CONFLICT(category_code, subcategory_code, name, brand) DO UPDATE SET
+                INSERT INTO products (name, brand, holder, company_id, expiry_date)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT(company_id, name, brand) DO UPDATE SET
                     holder = excluded.holder,
                     expiry_date = excluded.expiry_date,
                     updated_at = NOW()
-                RETURNING (xmax = 0) AS inserted
+                RETURNING id, (xmax = 0) AS inserted
              )
-             SELECT inserted FROM ins",
+             SELECT id, inserted FROM ins",
         )
         .bind(&r.name)
         .bind(&r.brand)
         .bind(&r.holder)
-        .bind(category_code)
-        .bind(subcategory_code)
+        .bind(company_id)
         .bind(&r.expiry_date)
         .fetch_one(&mut *tx)
         .await?;
+
         if is_ins {
             inserted += 1;
         } else {
             updated += 1;
         }
+
+        // Link the product to its category/subcategory (idempotent).
+        sqlx::query(
+            "INSERT INTO product_categories (product_id, category_code, subcategory_code)
+             VALUES ($1, $2, $3)
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(product_id)
+        .bind(category_code)
+        .bind(subcategory_code)
+        .execute(&mut *tx)
+        .await?;
     }
+
     tx.commit().await?;
     Ok((inserted, updated))
 }

@@ -23,7 +23,10 @@ impl Company {
 }
 
 /// A subcategory (product/premise) record: name, brand, the
-/// certificate holder, and the halal expiry date.
+/// certificate holder (company name), and the halal expiry date.
+/// The `holder` is resolved to a `company_id` via the companies table
+/// at insert time; the category/subcategory that the product was seen in
+/// are tracked via the `product_categories` mapping table, not here.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Product {
     pub name: String,

@@ -57,15 +57,27 @@ one row.
 | `id` | `SERIAL PK` | Auto-increment ID |
 | `name` | `TEXT` | Product/premise name |
 | `brand` | `TEXT` | Brand name (from `JENAMA:`) |
-| `holder` | `TEXT` | Certificate holder company |
-| `category_code` | `TEXT` | Parent category code |
-| `subcategory_code` | `TEXT` | Subcategory code |
+| `holder` | `TEXT` | Certificate holder company (text, not FK) |
 | `company_id` | `INTEGER` | FK → `companies.id` |
 | `expiry_date` | `TEXT` | Halal expiry date |
 | `created_at` | `TIMESTAMPTZ` | When the row was first inserted |
 | `updated_at` | `TIMESTAMPTZ` | When the row was last updated |
 
-Unique on `(category_code, subcategory_code, name, brand)`.
+Unique on `(company_id, name, brand)`. Category/subcategory membership is
+tracked separately in `product_categories`.
+
+**`product_categories`** — mapping table linking products to their
+(category, subcategory). A product can appear in multiple categories; a
+category can contain many products.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `product_id` | `INTEGER PK,FK` | → `products.id` (on delete cascade) |
+| `category_code` | `TEXT` | Parent category code |
+| `subcategory_code` | `TEXT` | Subcategory code |
+| `created_at` | `TIMESTAMPTZ` | When the link was first recorded |
+
+Composite PK on `(product_id, category_code, subcategory_code)`.
 
 **`scrap_log`** — records each scrape run generally (not per company/product
 row).

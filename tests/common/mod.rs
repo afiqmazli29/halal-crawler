@@ -53,6 +53,7 @@ pub async fn cleanup(pool: &PgPool, company_names: &[&str], product_names: &[&st
             .await
             .ok();
     }
+    // product_categories is deleted via ON DELETE CASCADE from products.
     for name in product_names {
         sqlx::query("DELETE FROM products WHERE name = $1")
             .bind(name)
