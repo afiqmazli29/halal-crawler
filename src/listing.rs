@@ -15,11 +15,15 @@ use crate::types::{Error, SubStrategy, error_chain};
 /// announces the total page count, and the remaining pages are fetched
 /// concurrently. Records are deduped by name. A failing letter is
 /// logged and skipped — it never aborts the rest of the category.
+///
+/// `max_pages` optionally caps how far a single letter paginates (debug runs);
+/// `None` means the full crawl.
 pub async fn fetch_companies(
     portal: &Portal,
     strategy: &SubStrategy,
+    max_pages: Option<u32>,
 ) -> Result<Vec<Company>, Error> {
-    let records = crawl(portal, strategy, parser::parse_table).await?;
+    let records = crawl(portal, strategy, max_pages, parser::parse_table).await?;
 
     let mut seen = HashSet::new();
     let deduped = records
@@ -32,11 +36,15 @@ pub async fn fetch_companies(
 
 /// Crawl a subcategory listing (products, premises, …) — same crawl,
 /// product rows, no dedup (records may share names).
+///
+/// `max_pages` optionally caps how far a single letter paginates (debug runs);
+/// `None` means the full crawl.
 pub async fn fetch_subcategory(
     portal: &Portal,
     strategy: &SubStrategy,
+    max_pages: Option<u32>,
 ) -> Result<Vec<Product>, Error> {
-    crawl(portal, strategy, parser::parse_product_table).await
+    crawl(portal, strategy, max_pages, parser::parse_product_table).await
 }
 
 /// The shared crawl: one task per letter, each letter paginating from
@@ -44,6 +52,7 @@ pub async fn fetch_subcategory(
 async fn crawl<T>(
     portal: &Portal,
     strategy: &SubStrategy,
+    max_pages: Option<u32>,
     parse: fn(&str) -> Vec<T>,
 ) -> Result<Vec<T>, Error>
 where
@@ -57,7 +66,7 @@ where
         let portal = Portal::clone(portal);
         let category = category.clone();
         set.spawn(async move {
-            letter_crawl(portal, category, ty, letter, parse)
+            letter_crawl(portal, category, ty, letter, max_pages, parse)
                 .await
                 .map_err(|e| format!("[{letter}] {}", error_chain(&e)))
         });
@@ -90,6 +99,7 @@ async fn letter_crawl<T>(
     category: String,
     ty: &'static str,
     letter: char,
+    max_pages: Option<u32>,
     parse: fn(&str) -> Vec<T>,
 ) -> Result<(char, Vec<T>), Error>
 where
@@ -97,20 +107,34 @@ where
 {
     let html = portal.search(&category, ty, letter, 1, "0").await?;
     let total_pages = parser::extract_total_pages(&html);
+    // A page cap (set in debug runs, or via env) stops a letter from crawling
+    // the portal's thousands of pages.
+    let fetch_up_to = match max_pages {
+        Some(m) if m < total_pages => m,
+        _ => total_pages,
+    };
+    let capped = fetch_up_to < total_pages;
     let page1_count = parse(&html).len();
-    println!("│    [{letter}] page 1/{total_pages} ✓  {page1_count} records");
+    println!(
+        "│    [{letter}] page 1/{fetch_up_to} ✓  {page1_count} records{}",
+        if capped {
+            format!(" (debug: capped from {total_pages})")
+        } else {
+            String::new()
+        }
+    );
 
     let mut records = parse(&html);
-    if total_pages > 1 {
+    if fetch_up_to > 1 {
         let mut set = JoinSet::new();
-        for page in 2..=total_pages {
+        for page in 2..=fetch_up_to {
             let portal = Portal::clone(&portal);
             let category = category.clone();
             set.spawn(async move {
                 let html = portal.search(&category, ty, letter, page, "0").await?;
                 let r = parse(&html);
                 let n = r.len();
-                println!("│    [{letter}] page {page}/{total_pages} ✓  {n} records");
+                println!("│    [{letter}] page {page}/{fetch_up_to} ✓  {n} records");
                 Ok::<_, Error>(r)
             });
         }

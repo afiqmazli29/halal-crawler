@@ -85,6 +85,12 @@ Unique on `(category_code, subcategory_code, name, brand)`.
 |---------|---------|-------|
 | Concurrency | 5 parallel requests | `MAX_CONCURRENT` in `constants.rs` |
 | DB URL | `postgres://postgres:postgres@localhost/halal` | `DATABASE_URL` env var |
+| Max pages/letter | 1 in debug builds, unlimited in release | `max_pages_per_letter()` in `constants.rs` |
+
+Debug builds (`cargo run`, no `--release`) automatically cap each letter's crawl
+at one page, so a local smoke run against the live portal won't chew through its
+thousands of pages. `HALAL_MAX_PAGES=N` overrides the cap for any build;
+`HALAL_MAX_PAGES=0` disables it (full crawl even in debug). See `.env.example`.
 
 ## Architecture
 

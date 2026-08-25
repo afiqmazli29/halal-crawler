@@ -1,7 +1,65 @@
-use scraper::{Html, Selector};
+use scraper::{ElementRef, Html, Selector};
 
 use crate::constants::STATES;
 use crate::records::{Company, Product};
+
+/// Build readable text from an element's children, joining `<br>`-separated
+/// lines with ", " and collapsing runs of whitespace into single spaces.
+///
+/// This works around scraper's raw `text()`, which concatenates descendant
+/// text nodes with no delimiter — so an address split across `<br>` tags (as
+/// the live portal emits) would otherwise come out as one unreadable run
+/// like `No12,JalanMerdeka50000Kuala Lumpur`.
+///
+/// Adjacent text nodes are concatenated exactly as they appear in the source,
+/// so a name split across multiple text runs (common on the portal) keeps its
+/// spacing instead of gaining stray spaces mid-word.
+fn element_text(el: &ElementRef) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    let mut buf = String::new();
+    element_lines(el, &mut lines, &mut buf);
+    flush_line(&mut lines, &mut buf);
+
+    let mut out = String::new();
+    for line in lines {
+        if line.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push_str(", ");
+        }
+        out.push_str(&line);
+    }
+    out.trim().to_string()
+}
+
+/// Recursively collect an element's text, buffering each line's raw text nodes
+/// (adjacency preserved). A `<br>` flushes the current line and starts a new
+/// one; repeated `<br>`s collapse because a flushed empty buffer produces no line.
+fn element_lines(el: &ElementRef, lines: &mut Vec<String>, buf: &mut String) {
+    for child in el.children() {
+        let node = child.value();
+        if let Some(text) = node.as_text() {
+            buf.push_str(text);
+        } else if let Some(elem) = ElementRef::wrap(child) {
+            if elem.value().name() == "br" {
+                flush_line(lines, buf);
+            } else {
+                element_lines(&elem, lines, buf);
+            }
+        }
+    }
+}
+
+/// Trim and collapse a buffered line's whitespace into single spaces, then push
+/// it if non-empty. Clears the buffer so the next line starts fresh.
+fn flush_line(lines: &mut Vec<String>, buf: &mut String) {
+    let line = buf.split_whitespace().collect::<Vec<_>>().join(" ");
+    buf.clear();
+    if !line.is_empty() {
+        lines.push(line);
+    }
+}
 
 /// Parse a directory search results page — extracts company-name and
 /// company-address spans into company records with postcode and state
@@ -14,12 +72,12 @@ pub fn parse_table(html: &str) -> Vec<Company> {
 
     let names: Vec<String> = document
         .select(&name_sel)
-        .map(|el| el.text().collect::<String>().trim().to_string())
+        .map(|el| element_text(&el))
         .collect();
 
     let addresses: Vec<String> = document
         .select(&addr_sel)
-        .map(|el| el.text().collect::<String>().trim().to_string())
+        .map(|el| element_text(&el))
         .collect();
 
     let len = names.len().max(addresses.len());
@@ -63,7 +121,7 @@ pub fn parse_product_table(html: &str) -> Vec<Product> {
         let Some(name_el) = row.select(&name_sel).next() else {
             continue;
         };
-        let name = name_el.text().collect::<String>().trim().to_string();
+        let name = element_text(&name_el);
         if name.is_empty() {
             continue;
         }
@@ -71,18 +129,18 @@ pub fn parse_product_table(html: &str) -> Vec<Product> {
         let brand = row
             .select(&brand_sel)
             .next()
-            .map(|el| el.text().collect::<String>())
+            .map(|el| element_text(&el))
             .map(|s| s.replace("JENAMA:", "").trim().to_string())
             .unwrap_or_default();
         let holder = row
             .select(&addr_sel)
             .next()
-            .map(|el| el.text().collect::<String>().trim().to_string())
+            .map(|el| element_text(&el))
             .unwrap_or_default();
         let expiry_date = row
             .select(&expiry_sel)
             .next()
-            .map(|el| el.text().collect::<String>().trim().to_string())
+            .map(|el| element_text(&el))
             .unwrap_or_default();
 
         records.push(Product {

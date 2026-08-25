@@ -93,6 +93,71 @@ fn test_parse_table_no_postcode_or_state() {
     assert_eq!(records[0].state, "");
 }
 
+#[test]
+fn test_parse_table_multiline_address_with_br() {
+    // The live portal emits multi-line addresses split across <br> tags. These
+    // must be joined with ", " instead of being concatenated with no delimiter.
+    let html = "<span class=\"company-name\">Syarikat ABC</span>\n\
+                <span class=\"company-address\">No 12, Jalan Merdeka<br>50000 Kuala Lumpur<br>Selangor</span>";
+
+    let records = parse_table(html);
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].address,
+        "No 12, Jalan Merdeka, 50000 Kuala Lumpur, Selangor"
+    );
+    assert_eq!(records[0].postcode, "50000");
+    assert_eq!(records[0].state, "Selangor");
+}
+
+#[test]
+fn test_parse_table_multiline_address_in_nested_element() {
+    // Line breaks may appear inside nested elements (e.g. <i>), and whitespace
+    // around tags should collapse to single spaces.
+    let html = "<span class=\"company-name\">Syarikat XYZ</span>\n\
+                <span class=\"company-address\"><i>No 12<br>Jalan Merdeka</i><br>\
+                47000 Shah Alam<br>Selangor</span>";
+
+    let records = parse_table(html);
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].address,
+        "No 12, Jalan Merdeka, 47000 Shah Alam, Selangor"
+    );
+    assert_eq!(records[0].postcode, "47000");
+    assert_eq!(records[0].state, "Selangor");
+}
+
+#[test]
+fn test_parse_table_single_line_address_preserved() {
+    // An already-readable single-line address stays identical.
+    let html = "<span class=\"company-name\">Co</span>\n\
+                <span class=\"company-address\">123 Jalan, 50000 KL, Selangor</span>";
+    let records = parse_table(html);
+    assert_eq!(records[0].address, "123 Jalan, 50000 KL, Selangor");
+}
+
+#[test]
+fn test_parse_table_name_split_across_adjacent_text_nodes() {
+    // The portal can split a company name across several adjacent text runs
+    // (or nested tags) with no whitespace between them. These must be
+    // concatenated as-is — NOT padded with stray spaces mid-word.
+    let html = "<span class=\"company-name\">ACE<b> HEALTH</b><i> PRODUCTS</i> SDN BHD</span>\n\
+                <span class=\"company-address\">1 Jalan, 50000 KL</span>";
+    let records = parse_table(html);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].name, "ACE HEALTH PRODUCTS SDN BHD");
+}
+
+#[test]
+fn test_parse_table_name_split_per_character() {
+    // Extreme case: a name whose characters sit in separate adjacent text nodes.
+    let html = "<span class=\"company-name\"><b>A</b><b>C</b><b>E</b></span>\n\
+                <span class=\"company-address\">2 Jalan</span>";
+    let records = parse_table(html);
+    assert_eq!(records[0].name, "ACE");
+}
+
 // ── parse_product_table ────────────────────────────────────────
 
 #[test]

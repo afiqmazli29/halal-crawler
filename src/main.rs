@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use halal_crawler::{config, db, listing, portal, types};
+use halal_crawler::{config, constants, db, listing, portal, types};
 use types::Error;
 
 #[tokio::main]
@@ -16,6 +16,11 @@ async fn main() -> Result<(), Error> {
 
     let portal = portal::Portal::new(portal::DEFAULT_BASE_URL)?;
     let pool = db::init(&db_url).await?;
+
+    // Debug builds crawl at most DEBUG_MAX_PAGES_PER_LETTER pages per letter so
+    // a local `cargo run` doesn't chew through the portal's thousands of pages.
+    // Release builds run the full crawl unless HALAL_MAX_PAGES is set.
+    let max_pages = constants::max_pages_per_letter(cfg!(debug_assertions));
 
     // Seed PHP session
     println!("  getting session...");
@@ -35,7 +40,7 @@ async fn main() -> Result<(), Error> {
             s.category_code
         );
 
-        match listing::fetch_companies(&portal, s).await {
+        match listing::fetch_companies(&portal, s, max_pages).await {
             Ok(records) => {
                 let n = db::insert_companies(&pool, &records, s.category_code).await?;
                 total_companies += n;
@@ -59,7 +64,7 @@ async fn main() -> Result<(), Error> {
             s.sub_name
         );
 
-        match listing::fetch_subcategory(&portal, s).await {
+        match listing::fetch_subcategory(&portal, s, max_pages).await {
             Ok(records) => {
                 let n = db::insert_products(&pool, &records, s.category_code, s.sub_code).await?;
                 total_products += n;

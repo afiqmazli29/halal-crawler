@@ -170,7 +170,7 @@ async fn test_scrape_companies_dedups_across_letters() {
             .body(html);
     });
 
-    let records = listing::fetch_companies(&ctx.portal, &company_strategy())
+    let records = listing::fetch_companies(&ctx.portal, &company_strategy(), None)
         .await
         .expect("scrape");
 
@@ -216,7 +216,7 @@ async fn test_scrape_companies_paginates_via_page_param() {
             .body("<html><body>empty</body></html>");
     });
 
-    let records = listing::fetch_companies(&ctx.portal, &company_strategy())
+    let records = listing::fetch_companies(&ctx.portal, &company_strategy(), None)
         .await
         .expect("scrape");
 
@@ -238,7 +238,7 @@ async fn test_scrape_companies_parses_address_fields() {
             .body(html);
     });
 
-    let records = listing::fetch_companies(&ctx.portal, &company_strategy())
+    let records = listing::fetch_companies(&ctx.portal, &company_strategy(), None)
         .await
         .expect("scrape");
 
@@ -276,7 +276,7 @@ async fn test_fetch_subcategory_mocked() {
             .body("<html><body>empty</body></html>");
     });
 
-    let records = listing::fetch_subcategory(&ctx.portal, &product_strategy())
+    let records = listing::fetch_subcategory(&ctx.portal, &product_strategy(), None)
         .await
         .expect("scrape");
 
@@ -329,7 +329,7 @@ async fn test_fetch_subcategory_paginates_via_page_param() {
             .body("<html><body>empty</body></html>");
     });
 
-    let records = listing::fetch_subcategory(&ctx.portal, &product_strategy())
+    let records = listing::fetch_subcategory(&ctx.portal, &product_strategy(), None)
         .await
         .expect("scrape");
 
@@ -350,7 +350,7 @@ async fn test_fetch_companies_empty_listing_returns_empty() {
             .body("<html><body>No spans here</body></html>");
     });
 
-    let records = listing::fetch_companies(&ctx.portal, &company_strategy())
+    let records = listing::fetch_companies(&ctx.portal, &company_strategy(), None)
         .await
         .expect("scrape");
 
@@ -375,7 +375,7 @@ async fn test_fetch_subcategory_no_records_returns_empty() {
             .body("<html><body>Nothing here</body></html>");
     });
 
-    let records = listing::fetch_subcategory(&ctx.portal, &strategy)
+    let records = listing::fetch_subcategory(&ctx.portal, &strategy, None)
         .await
         .expect("scrape");
     assert_eq!(records.len(), 0);
