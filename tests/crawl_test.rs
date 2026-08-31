@@ -100,6 +100,71 @@ async fn test_db_insert_and_query_products() {
 }
 
 #[tokio::test]
+async fn test_db_insert_products_links_holder_case_insensitively() {
+    let ctx = common::setup_db().await;
+
+    let company_name = "t3_Holder Co";
+    db::insert_companies(
+        &ctx.pool,
+        &[Company::from_value(&json!({"nama_syarikat": company_name}))],
+    )
+    .await
+    .unwrap();
+
+    let product_name = "t3_Product A";
+    let products = vec![Product::from_value(
+        &json!({"name": product_name, "brand": "BrandX", "company": "  T3_HOLDER co  "}),
+    )];
+    db::insert_products(&ctx.pool, &products, "PR", "PR")
+        .await
+        .expect("insert");
+
+    let company_id: Option<i32> =
+        sqlx::query_scalar("SELECT company_id FROM products WHERE name = $1")
+            .bind(product_name)
+            .fetch_one(&ctx.pool)
+            .await
+            .expect("product company_id");
+    let expected: i32 = sqlx::query_scalar("SELECT id FROM companies WHERE name = $1")
+        .bind(company_name)
+        .fetch_one(&ctx.pool)
+        .await
+        .expect("company id");
+    assert_eq!(company_id, Some(expected));
+
+    common::cleanup(&ctx.pool, &[company_name], &[product_name]).await;
+}
+
+#[tokio::test]
+async fn test_db_insert_products_skips_unresolvable_holder() {
+    let ctx = common::setup_db().await;
+
+    let holder = "t3_Brand New Holder Co";
+    let product_name = "t3_Product B";
+    let products = vec![Product::from_value(
+        &json!({"name": product_name, "brand": "BrandY", "company": holder}),
+    )];
+    let (inserted, updated) = db::insert_products(&ctx.pool, &products, "PR", "PR")
+        .await
+        .expect("insert");
+    assert_eq!((inserted, updated), (0, 0));
+
+    let product_count: i64 = sqlx::query_scalar("SELECT count(*) FROM products WHERE name = $1")
+        .bind(product_name)
+        .fetch_one(&ctx.pool)
+        .await
+        .expect("count");
+    assert_eq!(product_count, 0);
+
+    let company_count: i64 = sqlx::query_scalar("SELECT count(*) FROM companies WHERE name = $1")
+        .bind(holder)
+        .fetch_one(&ctx.pool)
+        .await
+        .expect("count");
+    assert_eq!(company_count, 0);
+}
+
+#[tokio::test]
 async fn test_db_insert_empty_returns_zero() {
     let ctx = common::setup_db().await;
 
@@ -321,6 +386,53 @@ async fn test_fetch_subcategory_mocked() {
     assert_eq!(biscuit_a.brand, "BrandA");
     assert_eq!(biscuit_a.holder, "t6_Parent Co");
     assert_eq!(biscuit_a.expiry_date, "2026-12-31");
+}
+
+#[tokio::test]
+async fn test_fetch_subcategory_dedups_by_name_brand_holder_expiry() {
+    let ctx = common::setup_mock().await;
+
+    let page1 = common::product_listing_html(
+        &[
+            ("tD_Dup", "BrandX", "Holder Co", "2026-01-01"),
+            ("tD_Dup", "BrandX", "Holder Co", "2026-01-01"),
+            ("tD_Dup", "BrandX", "Holder Co", "2026-02-02"),
+            ("tD_Other", "BrandY", "Holder Co", "2026-01-01"),
+        ],
+        1,
+    );
+
+    ctx.server.mock(|when, then| {
+        when.method(POST)
+            .path("/index.php")
+            .query_param("category", "PR")
+            .query_param("cari", "a")
+            .query_param("page", "1");
+        then.status(200)
+            .header("content-type", "text/html")
+            .body(page1);
+    });
+    ctx.server.mock(|when, then| {
+        when.method(POST).path("/index.php");
+        then.status(200)
+            .header("content-type", "text/html")
+            .body("<html><body>empty</body></html>");
+    });
+
+    let records = listing::fetch_subcategory(&ctx.portal, &product_strategy(), None)
+        .await
+        .expect("scrape");
+
+    assert_eq!(records.len(), 3);
+
+    let expiries: Vec<&str> = records
+        .iter()
+        .filter(|r| r.name == "tD_Dup")
+        .map(|r| r.expiry_date.as_str())
+        .collect();
+    assert!(expiries.contains(&"2026-01-01"), "got: {expiries:?}");
+    assert!(expiries.contains(&"2026-02-02"), "got: {expiries:?}");
+    assert!(records.iter().any(|r| r.name == "tD_Other"));
 }
 
 #[tokio::test]

@@ -46,16 +46,17 @@ pub async fn setup_mock() -> MockCtx {
 }
 
 pub async fn cleanup(pool: &PgPool, company_names: &[&str], product_names: &[&str]) {
-    for name in company_names {
-        sqlx::query("DELETE FROM companies WHERE name = $1")
+    // Products first: they FK-reference companies, and product_categories is
+    // deleted via ON DELETE CASCADE from products.
+    for name in product_names {
+        sqlx::query("DELETE FROM products WHERE name = $1")
             .bind(name)
             .execute(pool)
             .await
             .ok();
     }
-    // product_categories is deleted via ON DELETE CASCADE from products.
-    for name in product_names {
-        sqlx::query("DELETE FROM products WHERE name = $1")
+    for name in company_names {
+        sqlx::query("DELETE FROM companies WHERE name = $1")
             .bind(name)
             .execute(pool)
             .await

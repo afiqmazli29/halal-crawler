@@ -55,7 +55,7 @@ pub async fn init(db_url: &str) -> Result<PgPool, Error> {
             name TEXT NOT NULL,
             brand TEXT,
             holder TEXT,
-            company_id INTEGER REFERENCES companies(id),
+            company_id INTEGER NOT NULL REFERENCES companies(id),
             expiry_date TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -81,6 +81,13 @@ pub async fn init(db_url: &str) -> Result<PgPool, Error> {
         .await
         .ok();
     }
+
+    // company_id is mandatory — existing rows are always inserted with a
+    // resolved company_id, so SET NOT NULL is safe on a healthy table.
+    sqlx::query("ALTER TABLE products ALTER COLUMN company_id SET NOT NULL")
+        .execute(&pool)
+        .await
+        .ok();
 
     // Migrate: drop old products columns if they exist (moved to product_categories).
     // The syntax "DROP COLUMN IF EXISTS col" (without type) works in PostgreSQL 9.4+.
@@ -218,6 +225,32 @@ pub async fn insert_companies(pool: &PgPool, records: &[Company]) -> Result<(usi
     Ok((inserted, updated))
 }
 
+/// Resolve a product's `holder` (a company name) to a `companies.id`,
+/// matching case-insensitively and preferring an exact-name match. Returns
+/// `None` when the holder is empty or no company matches — the caller then
+/// skips the product rather than fabricating a company.
+async fn resolve_company(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    holder: &str,
+) -> Result<Option<i32>, Error> {
+    let holder = holder.trim();
+    if holder.is_empty() {
+        return Ok(None);
+    }
+
+    let existing: Option<i32> = sqlx::query_scalar(
+        "SELECT id FROM companies
+         WHERE name = $1 OR lower(name) = lower($1)
+         ORDER BY (name = $1) DESC, id
+         LIMIT 1",
+    )
+    .bind(holder)
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    Ok(existing)
+}
+
 /// Upsert products. The product's `holder` is resolved to a `company_id`
 /// via the companies table (matching by name). Each product is then linked
 /// to its (category_code, subcategory_code) via the `product_categories`
@@ -236,12 +269,15 @@ pub async fn insert_products(
     let mut updated = 0usize;
 
     for r in records {
-        // Resolve the holder (company name) to a company_id.
-        let company_id: Option<i32> =
-            sqlx::query_scalar("SELECT id FROM companies WHERE name = $1")
-                .bind(&r.holder)
-                .fetch_optional(&mut *tx)
-                .await?;
+        // company_id is NOT NULL: a product whose holder doesn't resolve to a
+        // real company has nowhere to link, so it's skipped.
+        let Some(company_id) = resolve_company(&mut tx, &r.holder).await? else {
+            eprintln!(
+                "│    skipping product with unresolvable holder: {:?}",
+                r.name
+            );
+            continue;
+        };
 
         // Upsert the product by (company_id, name, brand).
         let (product_id, is_ins): (i32, bool) = sqlx::query_as(

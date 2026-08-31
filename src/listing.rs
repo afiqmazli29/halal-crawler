@@ -36,7 +36,7 @@ pub async fn fetch_companies(
 }
 
 /// Crawl a subcategory listing (products, premises, …) — same crawl,
-/// product rows, no dedup (records may share names).
+/// product rows, deduped by (name, brand, holder, expiry_date).
 ///
 /// `max_pages` optionally caps how far a single letter paginates (debug runs);
 /// `None` means the full crawl.
@@ -45,7 +45,23 @@ pub async fn fetch_subcategory(
     strategy: &SubStrategy,
     max_pages: Option<u32>,
 ) -> Result<Vec<Product>, Error> {
-    crawl(portal, strategy, max_pages, parser::parse_product_table).await
+    let records = crawl(portal, strategy, max_pages, parser::parse_product_table).await?;
+
+    let mut seen = HashSet::new();
+    let deduped = records
+        .into_iter()
+        .filter(|r| {
+            !r.name.is_empty()
+                && seen.insert((
+                    r.name.clone(),
+                    r.brand.clone(),
+                    r.holder.clone(),
+                    r.expiry_date.clone(),
+                ))
+        })
+        .collect();
+
+    Ok(deduped)
 }
 
 /// Fetch the modal detail page for a single company by comp_code.

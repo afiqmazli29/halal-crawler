@@ -65,7 +65,7 @@ one row. On upsert, empty values never clobber existing non-empty ones.
 | `name` | `TEXT` | Product/premise name |
 | `brand` | `TEXT` | Brand name (from `JENAMA:`) |
 | `holder` | `TEXT` | Certificate holder company (text, not FK) |
-| `company_id` | `INTEGER` | FK → `companies.id` |
+| `company_id` | `INTEGER NOT NULL` | FK → `companies.id` |
 | `expiry_date` | `TEXT` | Halal expiry date |
 | `created_at` | `TIMESTAMPTZ` | When the row was first inserted |
 | `updated_at` | `TIMESTAMPTZ` | When the row was last updated |
