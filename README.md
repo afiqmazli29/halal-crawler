@@ -140,4 +140,6 @@ thousands of pages. `HALAL_MAX_PAGES=N` overrides the cap for any build;
 | `config.rs` | Category strategy lists (`company_strategies`, `other_strategies`). |
 | `constants.rs` | `MAX_CONCURRENT`, `DATA_PARAM`, `STATES`. |
 
-The domain glossary lives in `CONTEXT.md`.
+The domain glossary lives in `CONTEXT.md`. The technical design — module
+contracts, data-model invariants, decision log, and forward roadmap — lives in
+[`docs/DESIGN.md`](docs/DESIGN.md).

@@ -39,3 +39,8 @@ _Avoid_: scrape run, job
 **hdnCounter**:
 A hidden form field the portal echoes back as a record-count display; pagination is driven by the page parameter alone, with the total page count announced on page one (`Total Record : … From N`).
 _Avoid_: cursor, offset
+
+## See also
+
+[`docs/DESIGN.md`](docs/DESIGN.md) — technical design: module contracts,
+data-model invariants, decision log, forward roadmap.
