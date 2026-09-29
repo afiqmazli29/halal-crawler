@@ -997,7 +997,6 @@ dependencies = [
  "httpmock",
  "reqwest",
  "scraper",
- "serde_json",
  "sqlx",
  "tokio",
 ]

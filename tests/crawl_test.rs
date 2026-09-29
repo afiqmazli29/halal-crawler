@@ -1,7 +1,6 @@
 use httpmock::prelude::*;
-use serde_json::json;
 
-use halal_crawler::records::{Company, Product};
+use halal_crawler::records::Company;
 use halal_crawler::types::{CrawlTarget, Phase};
 use halal_crawler::{crawl, db, listing};
 
@@ -31,8 +30,16 @@ async fn test_db_insert_and_query_companies() {
 
     let names = &["t1_ABC Sdn Bhd", "t1_XYZ Sdn Bhd"];
     let records = vec![
-        Company::from_value(&json!({"nama_syarikat": names[0], "negeri": "Selangor"})),
-        Company::from_value(&json!({"nama_syarikat": names[1], "negeri": "KL"})),
+        Company {
+            name: names[0].to_string(),
+            state: "Selangor".to_string(),
+            ..Default::default()
+        },
+        Company {
+            name: names[1].to_string(),
+            state: "KL".to_string(),
+            ..Default::default()
+        },
     ];
 
     let (inserted, updated) = db::insert_companies(&ctx.pool, &records)
@@ -61,23 +68,14 @@ async fn test_db_insert_and_query_products() {
     let ctx = common::setup_db().await;
 
     let company_names = &["t2_Parent Co"];
-    db::insert_companies(
-        &ctx.pool,
-        &[Company::from_value(
-            &json!({"nama_syarikat": company_names[0]}),
-        )],
-    )
-    .await
-    .unwrap();
+    db::insert_companies(&ctx.pool, &[common::company(company_names[0])])
+        .await
+        .unwrap();
 
     let product_names = &["t2_Product A", "t2_Product B"];
     let products = vec![
-        Product::from_value(
-            &json!({"name": product_names[0], "brand": "BrandA", "expiry_date": "2026-12-31", "company": "t2_Parent Co", "category_code": "PR", "subcategory_code": "PR"}),
-        ),
-        Product::from_value(
-            &json!({"name": product_names[1], "brand": "BrandB", "expiry_date": "2027-06-15", "company": "t2_Parent Co", "category_code": "PR", "subcategory_code": "PR"}),
-        ),
+        common::product(product_names[0], "BrandA", "t2_Parent Co", "2026-12-31"),
+        common::product(product_names[1], "BrandB", "t2_Parent Co", "2027-06-15"),
     ];
 
     let (inserted, updated) = db::insert_products(&ctx.pool, &products)
@@ -103,21 +101,17 @@ async fn test_db_insert_products_writes_category_mapping() {
     let ctx = common::setup_db().await;
 
     let company_name = "tPC_Holder Co";
-    db::insert_companies(
-        &ctx.pool,
-        &[Company::from_value(&json!({"nama_syarikat": company_name}))],
-    )
-    .await
-    .unwrap();
+    db::insert_companies(&ctx.pool, &[common::company(company_name)])
+        .await
+        .unwrap();
 
     let product_name = "tPC_Product A";
-    let products = vec![Product::from_value(&json!({
-        "name": product_name,
-        "brand": "BrandPC",
-        "company": company_name,
-        "category_code": "PR",
-        "subcategory_code": "PR",
-    }))];
+    let products = vec![common::product(
+        product_name,
+        "BrandPC",
+        company_name,
+        "2027-01-01",
+    )];
     db::insert_products(&ctx.pool, &products)
         .await
         .expect("insert");
@@ -142,16 +136,16 @@ async fn test_db_insert_products_links_holder_case_insensitively() {
     let ctx = common::setup_db().await;
 
     let company_name = "t3_Holder Co";
-    db::insert_companies(
-        &ctx.pool,
-        &[Company::from_value(&json!({"nama_syarikat": company_name}))],
-    )
-    .await
-    .unwrap();
+    db::insert_companies(&ctx.pool, &[common::company(company_name)])
+        .await
+        .unwrap();
 
     let product_name = "t3_Product A";
-    let products = vec![Product::from_value(
-        &json!({"name": product_name, "brand": "BrandX", "company": "  T3_HOLDER co  ", "category_code": "PR", "subcategory_code": "PR"}),
+    let products = vec![common::product(
+        product_name,
+        "BrandX",
+        "  T3_HOLDER co  ",
+        "2026-01-01",
     )];
     db::insert_products(&ctx.pool, &products)
         .await
@@ -179,8 +173,11 @@ async fn test_db_insert_products_skips_unresolvable_holder() {
 
     let holder = "t3_Brand New Holder Co";
     let product_name = "t3_Product B";
-    let products = vec![Product::from_value(
-        &json!({"name": product_name, "brand": "BrandY", "company": holder, "category_code": "PR", "subcategory_code": "PR"}),
+    let products = vec![common::product(
+        product_name,
+        "BrandY",
+        holder,
+        "2026-01-01",
     )];
     let (inserted, updated) = db::insert_products(&ctx.pool, &products)
         .await
@@ -218,14 +215,18 @@ async fn test_db_upsert_companies() {
     let ctx = common::setup_db().await;
 
     let names = &["t4_Foo"];
-    let first = vec![Company::from_value(
-        &json!({"nama_syarikat": names[0], "state": "KL"}),
-    )];
+    let first = vec![Company {
+        name: names[0].to_string(),
+        state: "KL".to_string(),
+        ..Default::default()
+    }];
     db::insert_companies(&ctx.pool, &first).await.unwrap();
 
-    let second = vec![Company::from_value(
-        &json!({"nama_syarikat": names[0], "state": "Selangor"}),
-    )];
+    let second = vec![Company {
+        name: names[0].to_string(),
+        state: "Selangor".to_string(),
+        ..Default::default()
+    }];
     let (inserted, updated) = db::insert_companies(&ctx.pool, &second).await.unwrap();
     assert_eq!((inserted, updated), (0, 1));
 
@@ -254,10 +255,7 @@ async fn test_db_scrap_log_records_inserts() {
         .expect("start");
 
     let names = &["tSL_Co A", "tSL_Co B"];
-    let records = vec![
-        Company::from_value(&json!({"nama_syarikat": names[0]})),
-        Company::from_value(&json!({"nama_syarikat": names[1]})),
-    ];
+    let records = vec![common::company(names[0]), common::company(names[1])];
     let (inserted, updated) = db::insert_companies(&ctx.pool, &records)
         .await
         .expect("insert");
@@ -669,11 +667,12 @@ async fn test_fetch_company_modals_enriches_and_returns_products() {
         );
     });
 
-    let companies = vec![Company::from_value(&json!({
-        "nama_syarikat": "tM_Listing Co",
-        "alamat": "1 Jalan, 50000 KL, Kuala Lumpur",
-        "comp_code": "COMP-20230804-000001",
-    }))];
+    let companies = vec![Company {
+        name: "tM_Listing Co".to_string(),
+        address: "1 Jalan, 50000 KL, Kuala Lumpur".to_string(),
+        comp_code: "COMP-20230804-000001".to_string(),
+        ..Default::default()
+    }];
 
     let entries = listing::fetch_company_modals(&ctx.portal, &company_target(), &companies)
         .await
@@ -703,9 +702,7 @@ async fn test_fetch_company_modals_enriches_and_returns_products() {
 async fn test_fetch_company_modals_skips_companies_without_comp_code() {
     let ctx = common::setup_mock().await;
 
-    let companies = vec![Company::from_value(&json!({
-        "nama_syarikat": "tM_NoModal Co",
-    }))];
+    let companies = vec![common::company("tM_NoModal Co")];
 
     let entries = listing::fetch_company_modals(&ctx.portal, &company_target(), &companies)
         .await
@@ -764,11 +761,12 @@ async fn test_db_enrichment_does_not_split_company_on_name_spelling() {
     let ctx = common::setup_db().await;
 
     // Run 1: the listing discovers "tN_ABC Sdn Bhd".
-    let listing = Company::from_value(&json!({
-        "nama_syarikat": "tN_ABC Sdn Bhd",
-        "alamat": "1 Jalan, 50000 KL, Kuala Lumpur",
-        "comp_code": "COMP-N-1",
-    }));
+    let listing = Company {
+        name: "tN_ABC Sdn Bhd".to_string(),
+        address: "1 Jalan, 50000 KL, Kuala Lumpur".to_string(),
+        comp_code: "COMP-N-1".to_string(),
+        ..Default::default()
+    };
     db::insert_companies(&ctx.pool, &[listing.clone()])
         .await
         .unwrap();

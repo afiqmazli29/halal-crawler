@@ -3,7 +3,29 @@ use std::time::Duration;
 use httpmock::MockServer;
 use sqlx::PgPool;
 
+use halal_crawler::records::{Company, Product};
 use halal_crawler::{db, portal::Portal};
+
+/// A company record with just a name set; tests fill other fields as needed.
+pub fn company(name: &str) -> Company {
+    Company {
+        name: name.to_string(),
+        ..Default::default()
+    }
+}
+
+/// A product record with the fields every product carries. Membership
+/// defaults to `PR`/`PR`; tests override it when they need another target.
+pub fn product(name: &str, brand: &str, holder: &str, expiry_date: &str) -> Product {
+    Product {
+        name: name.to_string(),
+        brand: brand.to_string(),
+        holder: holder.to_string(),
+        expiry_date: expiry_date.to_string(),
+        category_code: "PR".to_string(),
+        subcategory_code: "PR".to_string(),
+    }
+}
 
 /// Context for tests that need a real PostgreSQL database.
 pub struct DbCtx {

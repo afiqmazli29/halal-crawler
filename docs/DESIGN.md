@@ -77,7 +77,7 @@ the run.
 | `portal.rs` | The Portal seam: base URL, PHP session, browser-shaped client, semaphore, POST `search`, `fetch_modal`, and the one shared retry policy. |
 | `listing.rs` | `fetch_companies` (name-dedup), `fetch_subcategory` (key-dedup), `fetch_company_modals`, and the shared `crawl`/`letter_crawl`. Hides pagination and concurrency. |
 | `parser.rs` | All HTML record extraction: `parse_table`, `parse_product_table`, `parse_modal`, `extract_postcode`, `extract_state`. |
-| `records.rs` | `Company` / `Product` types. `Product` carries its own (category, subcategory) membership. `from_value`/`pick_str` are test-only helpers; production parsing builds the structs directly in `parser.rs`. |
+| `records.rs` | `Company` / `Product` types. `Product` carries its own (category, subcategory) membership; `Company::fill_from` owns enrichment precedence. |
 | `db.rs` | Schema init, upsert inserts, private `resolve_company`, `start_scrap`/`finish_scrap`, `sample_companies`. |
 | `config.rs` | `targets()` — the single list of (category, ty, phase) crawl targets — plus `label()` for progress output. |
 | `constants.rs` | `MAX_CONCURRENT`, `DEBUG_MAX_PAGES_PER_LETTER`, `DATA_PARAM`, `STATES`, `max_pages_per_letter`. |
@@ -267,6 +267,7 @@ one-time migration for pre-split databases only.
 | D14 | The listing name is the company identity; the modal never rewrites it | `companies` is unique on `name`; a differently-spelled modal name would otherwise create a duplicate row. | Modal name wins — silently splits one company into two. |
 | D15 | `listing` owns the pagination grammar and cap policy | `total_pages` and `pages_to_fetch` are private to the module that paginates; the parser is for record extraction only. | `extract_total_pages` public in `parser`, tested away from its only caller. |
 | D16 | `crawl::run` owns both phases and the `scrap_log` lifecycle | The binary becomes thin; the run's insert ordering and log open/close are testable through one interface, and failures surface in `RunReport`. | Orchestration in `main.rs` (no test seam); a closure-based `db::with_scrap_log`. |
+| D17 | Records are built directly; no JSON adapter | Production parsing builds `Company`/`Product` in `parser.rs`; a `from_value`/`pick_str` adapter only ever served tests and its suite guarded no production path. Dropping it also drops the `serde_json` production dependency. | Keep a test-only adapter; promote it so the parser emits JSON. |
 
 ## 11. Forward roadmap
 
