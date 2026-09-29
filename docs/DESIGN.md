@@ -67,7 +67,7 @@ The crate is a lib + bin: `src/lib.rs` exposes the `halal_crawler` crate,
 | `portal.rs` | The Portal seam: base URL, PHP session, browser-shaped client, semaphore, POST `search`, `fetch_modal`, and the one shared retry policy. |
 | `listing.rs` | `fetch_companies` (name-dedup), `fetch_subcategory` (key-dedup), `fetch_company_modals`, and the shared `crawl`/`letter_crawl`. Hides pagination and concurrency. |
 | `parser.rs` | All HTML extraction: `parse_table`, `parse_product_table`, `parse_modal`, `extract_total_pages`, `extract_postcode`, `extract_state`. |
-| `records.rs` | `Company` / `Product` types. `from_value`/`pick_str` are test-only helpers; production parsing builds the structs directly in `parser.rs`. |
+| `records.rs` | `Company` / `Product` types. `Product` carries its own (category, subcategory) membership. `from_value`/`pick_str` are test-only helpers; production parsing builds the structs directly in `parser.rs`. |
 | `db.rs` | Schema init, upsert inserts, private `resolve_company`, `start_scrap`/`finish_scrap`, `sample_companies`. |
 | `config.rs` | `targets()` — the single list of (category, ty, phase) crawl targets — plus `label()` for progress output. |
 | `constants.rs` | `MAX_CONCURRENT`, `DEBUG_MAX_PAGES_PER_LETTER`, `DATA_PARAM`, `STATES`, `max_pages_per_letter`. |
@@ -88,12 +88,16 @@ struct Company {
 
 struct Product {
     name, brand, holder, expiry_date,
+    category_code, subcategory_code,
 }
 ```
 
 `Company.comp_code` is scraped from the listing's `onclick` link; the remaining
 company fields are filled from the modal detail page. `Product.holder` is a
 company name (text, not a FK); it is resolved to a `company_id` at insert time.
+`Product.category_code` / `subcategory_code` carry the membership the record was
+discovered under, so the record is self-describing and `insert_products` needs
+no extra parameters.
 
 ## 4. Portal protocol contract
 
@@ -137,8 +141,8 @@ records; they never learn about `Total Record` lines or the page parameter.
 total, then fetches the rest concurrently. A failing letter is logged and
 skipped, never aborting the category. `fetch_company_modals` fetches modal
 pages concurrently, merging modal fields over listing fields and keeping the
-listing's `comp_code`; products are returned as parsed — category/subcategory
-membership is attached later, at insert time, via `product_categories`.
+listing's `comp_code`. Both `fetch_subcategory` and `fetch_company_modals` stamp
+each `Product` with the target's membership before returning it.
 
 **`parser`** — all HTML parsing lives here. `element_text` joins
 `<br>`-separated lines with `", "` and collapses whitespace, working around
@@ -175,7 +179,9 @@ one-time migration for pre-split databases only.
 - **`company_id` is mandatory.** A product whose holder doesn't resolve to a
   real company is skipped, never linked to a fabricated company (`db.rs:274`).
 - **Product identity is `(company_id, name, brand)`.** Category membership is
-  tracked in `product_categories`, not on the product row.
+  tracked in `product_categories`, not on the product row. `listing`'s in-memory
+  dedup key is `(name, brand, holder)` — the same identity with `holder` standing
+  in for `company_id` — so dedup and persistence agree.
 - **`scrap_log` is per category+phase, not per row.**
 
 ## 7. Concurrency & reliability
@@ -230,6 +236,8 @@ one-time migration for pre-split databases only.
 | D8 | Debug builds cap pages/letter | A local `cargo run` must not crawl thousands of live pages. | Always full crawl; require `--release` to smoke-test. |
 | D9 | One retry policy for every Portal request | `search` and `fetch_modal` share `Portal::retrying`; a dropped modal connection must not silently lose a company's enrichment. | Retry only `search`; a separate unused `get_retry`. |
 | D10 | The Portal seam owns URL shapes and the ignored `hdnCounter` | Callers pass a `comp_code`, not a URL; `search` sends `hdnCounter="0"` internally. Keeps protocol decisions inside the seam. | `listing` building modal URLs from `Portal::base()`; a caller-visible `counter` parameter. |
+| D11 | Category membership travels on the `Product` record | The record is self-describing; `insert_products` takes records alone. `listing` stamps it (the parser stays target-free). | Threading `(category, ty)` from `main` through `listing` into `db`. |
+| D12 | In-memory product dedup key is `(name, brand, holder)` | Matches the persistence identity `(company_id, name, brand)`, with `holder` standing in for `company_id`; expiry is data, not identity. | Deduping by `(name, brand, holder, expiry_date)` — let two rows differing only in expiry collide in the upsert. |
 
 ## 11. Forward roadmap
 

@@ -73,14 +73,14 @@ async fn test_db_insert_and_query_products() {
     let product_names = &["t2_Product A", "t2_Product B"];
     let products = vec![
         Product::from_value(
-            &json!({"name": product_names[0], "brand": "BrandA", "expiry_date": "2026-12-31", "company": "t2_Parent Co"}),
+            &json!({"name": product_names[0], "brand": "BrandA", "expiry_date": "2026-12-31", "company": "t2_Parent Co", "category_code": "PR", "subcategory_code": "PR"}),
         ),
         Product::from_value(
-            &json!({"name": product_names[1], "brand": "BrandB", "expiry_date": "2027-06-15", "company": "t2_Parent Co"}),
+            &json!({"name": product_names[1], "brand": "BrandB", "expiry_date": "2027-06-15", "company": "t2_Parent Co", "category_code": "PR", "subcategory_code": "PR"}),
         ),
     ];
 
-    let (inserted, updated) = db::insert_products(&ctx.pool, &products, "PR", "PR")
+    let (inserted, updated) = db::insert_products(&ctx.pool, &products)
         .await
         .expect("insert");
     assert_eq!((inserted, updated), (2, 0));
@@ -99,6 +99,45 @@ async fn test_db_insert_and_query_products() {
 }
 
 #[tokio::test]
+async fn test_db_insert_products_writes_category_mapping() {
+    let ctx = common::setup_db().await;
+
+    let company_name = "tPC_Holder Co";
+    db::insert_companies(
+        &ctx.pool,
+        &[Company::from_value(&json!({"nama_syarikat": company_name}))],
+    )
+    .await
+    .unwrap();
+
+    let product_name = "tPC_Product A";
+    let products = vec![Product::from_value(&json!({
+        "name": product_name,
+        "brand": "BrandPC",
+        "company": company_name,
+        "category_code": "PR",
+        "subcategory_code": "PR",
+    }))];
+    db::insert_products(&ctx.pool, &products)
+        .await
+        .expect("insert");
+
+    let (cat, sub): (String, String) = sqlx::query_as(
+        "SELECT pc.category_code, pc.subcategory_code
+         FROM product_categories pc
+         JOIN products p ON p.id = pc.product_id
+         WHERE p.name = $1",
+    )
+    .bind(product_name)
+    .fetch_one(&ctx.pool)
+    .await
+    .expect("mapping row");
+    assert_eq!((cat.as_str(), sub.as_str()), ("PR", "PR"));
+
+    common::cleanup(&ctx.pool, &[company_name], &[product_name]).await;
+}
+
+#[tokio::test]
 async fn test_db_insert_products_links_holder_case_insensitively() {
     let ctx = common::setup_db().await;
 
@@ -112,9 +151,9 @@ async fn test_db_insert_products_links_holder_case_insensitively() {
 
     let product_name = "t3_Product A";
     let products = vec![Product::from_value(
-        &json!({"name": product_name, "brand": "BrandX", "company": "  T3_HOLDER co  "}),
+        &json!({"name": product_name, "brand": "BrandX", "company": "  T3_HOLDER co  ", "category_code": "PR", "subcategory_code": "PR"}),
     )];
-    db::insert_products(&ctx.pool, &products, "PR", "PR")
+    db::insert_products(&ctx.pool, &products)
         .await
         .expect("insert");
 
@@ -141,9 +180,9 @@ async fn test_db_insert_products_skips_unresolvable_holder() {
     let holder = "t3_Brand New Holder Co";
     let product_name = "t3_Product B";
     let products = vec![Product::from_value(
-        &json!({"name": product_name, "brand": "BrandY", "company": holder}),
+        &json!({"name": product_name, "brand": "BrandY", "company": holder, "category_code": "PR", "subcategory_code": "PR"}),
     )];
-    let (inserted, updated) = db::insert_products(&ctx.pool, &products, "PR", "PR")
+    let (inserted, updated) = db::insert_products(&ctx.pool, &products)
         .await
         .expect("insert");
     assert_eq!((inserted, updated), (0, 0));
@@ -170,9 +209,7 @@ async fn test_db_insert_empty_returns_zero() {
     let (inserted, updated) = db::insert_companies(&ctx.pool, &[]).await.expect("ok");
     assert_eq!((inserted, updated), (0, 0));
 
-    let (inserted, updated) = db::insert_products(&ctx.pool, &[], "PR", "PR")
-        .await
-        .expect("ok");
+    let (inserted, updated) = db::insert_products(&ctx.pool, &[]).await.expect("ok");
     assert_eq!((inserted, updated), (0, 0));
 }
 
@@ -388,9 +425,12 @@ async fn test_fetch_subcategory_mocked() {
 }
 
 #[tokio::test]
-async fn test_fetch_subcategory_dedups_by_name_brand_holder_expiry() {
+async fn test_fetch_subcategory_dedups_by_name_brand_holder() {
     let ctx = common::setup_mock().await;
 
+    // Two tD_Dup rows share (name, brand, holder) but differ in expiry: the
+    // in-memory identity must match the persistence key (company_id, name,
+    // brand), so only one survives. tD_Other has a different brand.
     let page1 = common::product_listing_html(
         &[
             ("tD_Dup", "BrandX", "Holder Co", "2026-01-01"),
@@ -422,16 +462,31 @@ async fn test_fetch_subcategory_dedups_by_name_brand_holder_expiry() {
         .await
         .expect("scrape");
 
-    assert_eq!(records.len(), 3);
-
-    let expiries: Vec<&str> = records
-        .iter()
-        .filter(|r| r.name == "tD_Dup")
-        .map(|r| r.expiry_date.as_str())
-        .collect();
-    assert!(expiries.contains(&"2026-01-01"), "got: {expiries:?}");
-    assert!(expiries.contains(&"2026-02-02"), "got: {expiries:?}");
+    assert_eq!(records.len(), 2);
+    assert_eq!(records.iter().filter(|r| r.name == "tD_Dup").count(), 1);
     assert!(records.iter().any(|r| r.name == "tD_Other"));
+}
+
+#[tokio::test]
+async fn test_fetch_subcategory_stamps_target_membership() {
+    let ctx = common::setup_mock().await;
+
+    let page1 =
+        common::product_listing_html(&[("tS_Prod", "BrandZ", "Holder Co", "2026-01-01")], 1);
+    ctx.server.mock(|when, then| {
+        when.method(POST).path("/index.php");
+        then.status(200)
+            .header("content-type", "text/html")
+            .body(page1);
+    });
+
+    let records = listing::fetch_subcategory(&ctx.portal, &product_target(), None)
+        .await
+        .expect("scrape");
+
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].category_code, "PR");
+    assert_eq!(records[0].subcategory_code, "PR");
 }
 
 #[tokio::test]
@@ -572,7 +627,7 @@ async fn test_fetch_company_modals_enriches_and_returns_products() {
         "comp_code": "COMP-20230804-000001",
     }))];
 
-    let entries = listing::fetch_company_modals(&ctx.portal, &companies)
+    let entries = listing::fetch_company_modals(&ctx.portal, &company_target(), &companies)
         .await
         .expect("modals");
 
@@ -585,10 +640,13 @@ async fn test_fetch_company_modals_enriches_and_returns_products() {
     // Fields missing from the modal fall back to the listing values
     assert_eq!(company.address, "1 Jalan, 50000 KL, Kuala Lumpur");
     assert_eq!(company.comp_code, "COMP-20230804-000001");
-    // Products were parsed from the modal's Product / Menu List
+    // Products were parsed from the modal's Product / Menu List and stamped
+    // with the target's membership.
     assert_eq!(products.len(), 1);
     assert_eq!(products[0].name, "HK1 TEST PRODUCT A");
     assert_eq!(products[0].expiry_date, "15/07/2029");
+    assert_eq!(products[0].category_code, "BG");
+    assert_eq!(products[0].subcategory_code, "CO");
 }
 
 #[tokio::test]
@@ -599,7 +657,7 @@ async fn test_fetch_company_modals_skips_companies_without_comp_code() {
         "nama_syarikat": "tM_NoModal Co",
     }))];
 
-    let entries = listing::fetch_company_modals(&ctx.portal, &companies)
+    let entries = listing::fetch_company_modals(&ctx.portal, &company_target(), &companies)
         .await
         .expect("modals");
 

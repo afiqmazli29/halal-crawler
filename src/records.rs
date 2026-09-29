@@ -37,14 +37,17 @@ impl Company {
 /// A subcategory (product/premise) record: name, brand, the
 /// certificate holder (company name), and the halal expiry date.
 /// The `holder` is resolved to a `company_id` via the companies table
-/// at insert time; the category/subcategory that the product was seen in
-/// are tracked via the `product_categories` mapping table, not here.
+/// at insert time. `category_code` / `subcategory_code` carry the
+/// membership the record was discovered under, so the record is
+/// self-describing; the mapping is persisted to `product_categories`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Product {
     pub name: String,
     pub brand: String,
     pub holder: String,
     pub expiry_date: String,
+    pub category_code: String,
+    pub subcategory_code: String,
 }
 
 impl Product {
@@ -55,6 +58,8 @@ impl Product {
             brand: pick_str(v, &["brand", "jenama"]),
             holder: pick_str(v, &["company", "holder", "company_name", "syarikat"]),
             expiry_date: pick_str(v, &["expiry_date", "tarikh_tamat", "tempoh_sah_laku"]),
+            category_code: pick_str(v, &["category_code"]),
+            subcategory_code: pick_str(v, &["subcategory_code"]),
         }
     }
 }

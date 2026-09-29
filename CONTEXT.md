@@ -25,7 +25,7 @@ A certified company listing record: name, address, postcode, state.
 _Avoid_: business, firm, Syarikat
 
 **Product**:
-A certified product or premise listing record: name, brand, certificate holder, expiry date.
+A certified product or premise listing record: name, brand, certificate holder, expiry date, and the (category, subcategory) it was discovered under.
 _Avoid_: item, listing entry
 
 **Record**:

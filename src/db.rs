@@ -252,15 +252,11 @@ async fn resolve_company(
 }
 
 /// Upsert products. The product's `holder` is resolved to a `company_id`
-/// via the companies table (matching by name). Each product is then linked
-/// to its (category_code, subcategory_code) via the `product_categories`
-/// mapping table. Returns `(inserted, updated)` product rows.
-pub async fn insert_products(
-    pool: &PgPool,
-    records: &[Product],
-    category_code: &str,
-    subcategory_code: &str,
-) -> Result<(usize, usize), Error> {
+/// via the companies table (matching by name). Each product carries its own
+/// (category_code, subcategory_code) membership, which is linked via the
+/// `product_categories` mapping table. Returns `(inserted, updated)` product
+/// rows.
+pub async fn insert_products(pool: &PgPool, records: &[Product]) -> Result<(usize, usize), Error> {
     if records.is_empty() {
         return Ok((0, 0));
     }
@@ -313,8 +309,8 @@ pub async fn insert_products(
              ON CONFLICT DO NOTHING",
         )
         .bind(product_id)
-        .bind(category_code)
-        .bind(subcategory_code)
+        .bind(&r.category_code)
+        .bind(&r.subcategory_code)
         .execute(&mut *tx)
         .await?;
     }

@@ -35,7 +35,9 @@ pub async fn fetch_companies(
 }
 
 /// Crawl a subcategory listing (products, premises, …) — same crawl,
-/// product rows, deduped by (name, brand, holder, expiry_date).
+/// product rows stamped with the target's membership and deduped by
+/// (name, brand, holder) — the in-memory stand-in for the persistence key
+/// `(company_id, name, brand)`.
 ///
 /// `max_pages` optionally caps how far a single letter paginates (debug runs);
 /// `None` means the full crawl.
@@ -49,14 +51,13 @@ pub async fn fetch_subcategory(
     let mut seen = HashSet::new();
     let deduped = records
         .into_iter()
+        .map(|mut r| {
+            r.category_code = target.category_code.to_string();
+            r.subcategory_code = target.ty.to_string();
+            r
+        })
         .filter(|r| {
-            !r.name.is_empty()
-                && seen.insert((
-                    r.name.clone(),
-                    r.brand.clone(),
-                    r.holder.clone(),
-                    r.expiry_date.clone(),
-                ))
+            !r.name.is_empty() && seen.insert((r.name.clone(), r.brand.clone(), r.holder.clone()))
         })
         .collect();
 
@@ -66,13 +67,14 @@ pub async fn fetch_subcategory(
 /// Fetch and parse modal detail pages for a batch of companies concurrently.
 /// Each company's `comp_code` is used to fetch its modal page, which returns
 /// enriched company data (phone, fax, email, website, etc.) and products.
-/// Products are returned as parsed; their category/subcategory membership is
-/// attached later, at insert time, via the `product_categories` table.
+/// Products are stamped with the target's membership, so they are
+/// self-describing when handed to persistence.
 ///
 /// Companies without a comp_code are skipped (left unchanged). Concurrency is
 /// bounded by the Portal's own semaphore, so callers need not cap it.
 pub async fn fetch_company_modals(
     portal: &Portal,
+    target: &CrawlTarget,
     companies: &[Company],
 ) -> Result<Vec<(Company, Vec<Product>)>, Error> {
     let mut set = JoinSet::new();
@@ -88,10 +90,16 @@ pub async fn fetch_company_modals(
         let portal = Portal::clone(portal);
         let comp_code = company.comp_code.clone();
         let company = company.clone();
+        let category_code = target.category_code.to_string();
+        let subcategory_code = target.ty.to_string();
 
         set.spawn(async move {
             let html = portal.fetch_modal(&comp_code).await?;
-            let (mut modal_company, products) = parser::parse_modal(&html);
+            let (mut modal_company, mut products) = parser::parse_modal(&html);
+            for p in &mut products {
+                p.category_code = category_code.clone();
+                p.subcategory_code = subcategory_code.clone();
+            }
 
             // Merge: keep the comp_code we already have, fill in modal fields
             if modal_company.name.is_empty() {

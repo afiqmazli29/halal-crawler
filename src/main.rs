@@ -60,7 +60,7 @@ async fn main() -> Result<(), Error> {
 
                 // Fetch each company's modal detail page (concurrently,
                 // capped) for phone/fax/email/etc. and its product list.
-                match listing::fetch_company_modals(&portal, &records).await {
+                match listing::fetch_company_modals(&portal, s, &records).await {
                     Ok(entries) => {
                         let mut companies = Vec::with_capacity(entries.len());
                         let mut all_products = Vec::new();
@@ -74,9 +74,7 @@ async fn main() -> Result<(), Error> {
                         upd_total += upd2;
 
                         if !all_products.is_empty() {
-                            let (pins, pupd) =
-                                db::insert_products(&pool, &all_products, s.category_code, s.ty)
-                                    .await?;
+                            let (pins, pupd) = db::insert_products(&pool, &all_products).await?;
                             println!("│  {pins} products inserted, {pupd} products updated");
                             total_products += pins + pupd;
                         }
@@ -108,8 +106,7 @@ async fn main() -> Result<(), Error> {
         let log_id = db::start_scrap(&pool, s.category_code, s.phase.as_str()).await?;
         match listing::fetch_subcategory(&portal, s, max_pages).await {
             Ok(records) => {
-                let (inserted, updated) =
-                    db::insert_products(&pool, &records, s.category_code, s.ty).await?;
+                let (inserted, updated) = db::insert_products(&pool, &records).await?;
                 db::finish_scrap(&pool, log_id, inserted, updated).await?;
                 total_products += inserted + updated;
                 println!("└─ {inserted} inserted, {updated} updated → DB");

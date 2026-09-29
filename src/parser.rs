@@ -200,6 +200,7 @@ pub fn parse_product_table(html: &str) -> Vec<Product> {
             brand,
             holder,
             expiry_date,
+            ..Default::default()
         });
     }
 
@@ -353,6 +354,7 @@ pub fn parse_modal(html: &str) -> (Company, Vec<Product>) {
                         brand: String::new(),
                         holder,
                         expiry_date: expiry,
+                        ..Default::default()
                     });
                 }
             }
