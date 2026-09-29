@@ -86,8 +86,9 @@ the run.
 ## 3. Domain model
 
 See [`CONTEXT.md`](../CONTEXT.md) for the glossary (Portal, Listing, Category,
-Subcategory, Company, Product, Record, Crawl, hdnCounter) and its "Avoid:"
-list. The typed shapes every module hands along are:
+Subcategory, Company, Product, Record, Crawl, Crawl target, Phase, Run,
+hdnCounter) and its "Avoid:" list. The typed shapes every module hands along
+are:
 
 ```rust
 struct Company {
@@ -238,12 +239,17 @@ one-time migration for pre-split databases only.
 - **Portal seam** — crawl tests substitute an httpmock server via
   `Portal::new(base_url)`, so pagination and dedup are tested without the live
   portal.
-- **Shared fixtures** — `tests/common/mod.rs` provides `listing_html` and
-  `product_listing_html`; reuse them when adding crawl tests.
+- **Shared fixtures** — `tests/common/mod.rs` provides `listing_html`,
+  `product_listing_html`, and the `company`/`product` record constructors;
+  reuse them when adding crawl tests.
+- **Run orchestration** — `crawl::run` is tested end-to-end with an httpmock
+  portal and a live PostgreSQL: counts, enrichment, and the `scrap_log`
+  lifecycle are asserted through the one interface.
 - **DB-backed suites** — `crawl_test.rs` and `tests/common` need a live
   PostgreSQL; point elsewhere via `TEST_DATABASE_URL`.
 - **Non-DB suites** (fast) — `parser_tests`, `records_tests`, `config_tests`,
-  `constants_tests`.
+  `constants_tests`, plus `listing`'s in-module unit tests for the pagination
+  grammar and cap policy.
 - **Compile check** — `cargo check`; the pre-commit hook runs
   `cargo fmt -- --check` + `cargo check`.
 
@@ -341,7 +347,9 @@ Modal parsing is verified for a subset of categories.
   fallback ordering needs real-data validation.
 - **Portal stability.** Connection drops under concurrency are expected; if
   they worsen, lower `MAX_CONCURRENT`.
-- **Silent partial crawls.** A capped or failed letter currently logs but does
-  not fail the run; F1's checkpointing should make incompleteness explicit.
+- **Silent partial crawls.** A capped or failed letter logs but does not abort
+  the run; `RunReport.failures` records failed targets, but a capped letter is
+  still only visible in stdout. F1's checkpointing should make incompleteness
+  explicit in the report.
 - **Modal layout drift.** The portal can change markup per category without
   notice; F4's detection is the mitigation.
