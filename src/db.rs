@@ -172,6 +172,11 @@ pub async fn finish_scrap(
 /// alone. All modal-enriched fields (phone, fax, email, …) are persisted;
 /// empty values never clobber existing non-empty ones. Returns
 /// `(inserted, updated)` per record via the Postgres `xmax = 0` trick.
+///
+/// The `CASE` expressions below are the *cross-run* half of the
+/// empty-never-clobbers rule: run 2's listing pass has an empty `phone_no`,
+/// and without the guard it would wipe the value run 1's modal pass stored.
+/// The *within-run* half lives in `Company::fill_from` (`records.rs`).
 pub async fn insert_companies(pool: &PgPool, records: &[Company]) -> Result<(usize, usize), Error> {
     if records.is_empty() {
         return Ok((0, 0));

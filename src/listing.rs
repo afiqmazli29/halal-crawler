@@ -101,22 +101,10 @@ pub async fn fetch_company_modals(
                 p.subcategory_code = subcategory_code.clone();
             }
 
-            // Merge: keep the comp_code we already have, fill in modal fields
-            if modal_company.name.is_empty() {
-                modal_company.name = company.name.clone();
-            }
-            if modal_company.address.is_empty() {
-                modal_company.address = company.address.clone();
-            }
-            if modal_company.postcode.is_empty() {
-                modal_company.postcode = company.postcode.clone();
-            }
-            if modal_company.state.is_empty() {
-                modal_company.state = company.state.clone();
-            }
-            if modal_company.comp_code.is_empty() {
-                modal_company.comp_code = company.comp_code.clone();
-            }
+            // The listing name is the company's identity — the modal may spell
+            // it differently, so keep the listing's and fill the rest from it.
+            modal_company.name = company.name.clone();
+            modal_company.fill_from(&company);
 
             Ok::<_, Error>((modal_company, products))
         });

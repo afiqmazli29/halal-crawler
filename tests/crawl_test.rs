@@ -633,10 +633,12 @@ async fn test_fetch_company_modals_enriches_and_returns_products() {
 
     assert_eq!(entries.len(), 1);
     let (company, products) = &entries[0];
-    // Enriched fields came from the modal
-    assert_eq!(company.name, "tM_Enriched Co");
+    // Enriched fields came from the modal …
     assert_eq!(company.phone_no, "03-1234567");
     assert_eq!(company.email, "a@b.example");
+    // … but the listing name is the identity and is never rewritten by the
+    // modal, even when the modal spells it differently.
+    assert_eq!(company.name, "tM_Listing Co");
     // Fields missing from the modal fall back to the listing values
     assert_eq!(company.address, "1 Jalan, 50000 KL, Kuala Lumpur");
     assert_eq!(company.comp_code, "COMP-20230804-000001");
@@ -707,4 +709,45 @@ async fn test_db_persists_modal_enriched_fields() {
     assert_eq!(comp, "COMP-20240101-999999");
 
     common::cleanup(&ctx.pool, &[name], &[]).await;
+}
+
+#[tokio::test]
+async fn test_db_enrichment_does_not_split_company_on_name_spelling() {
+    let ctx = common::setup_db().await;
+
+    // Run 1: the listing discovers "tN_ABC Sdn Bhd".
+    let listing = Company::from_value(&json!({
+        "nama_syarikat": "tN_ABC Sdn Bhd",
+        "alamat": "1 Jalan, 50000 KL, Kuala Lumpur",
+        "comp_code": "COMP-N-1",
+    }));
+    db::insert_companies(&ctx.pool, &[listing.clone()])
+        .await
+        .unwrap();
+
+    // Run 2's modal spells the name differently. Enrichment must keep the
+    // listing identity, so this upserts the same row — not a second one.
+    let mut enriched = Company {
+        name: "tN_ABC SDN. BHD.".to_string(),
+        phone_no: "03-5555".to_string(),
+        ..Default::default()
+    };
+    enriched.name = listing.name.clone();
+    enriched.fill_from(&listing);
+    db::insert_companies(&ctx.pool, &[enriched]).await.unwrap();
+
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM companies WHERE name LIKE 'tN_%'")
+        .fetch_one(&ctx.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1, "one company, not a duplicate row");
+
+    let phone: String = sqlx::query_scalar("SELECT phone_no FROM companies WHERE name = $1")
+        .bind("tN_ABC Sdn Bhd")
+        .fetch_one(&ctx.pool)
+        .await
+        .unwrap();
+    assert_eq!(phone, "03-5555");
+
+    common::cleanup(&ctx.pool, &["tN_ABC Sdn Bhd"], &[]).await;
 }

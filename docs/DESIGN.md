@@ -140,9 +140,11 @@ records; they never learn about `Total Record` lines or the page parameter.
 `crawl` spawns one task per letter; `letter_crawl` fetches page 1, reads the
 total, then fetches the rest concurrently. A failing letter is logged and
 skipped, never aborting the category. `fetch_company_modals` fetches modal
-pages concurrently, merging modal fields over listing fields and keeping the
-listing's `comp_code`. Both `fetch_subcategory` and `fetch_company_modals` stamp
-each `Product` with the target's membership before returning it.
+pages concurrently and merges them onto the listing record via
+`Company::fill_from`: the listing name is the identity and is never rewritten,
+while the modal's non-empty fields win and the listing fills the gaps. Both
+`fetch_subcategory` and `fetch_company_modals` stamp each `Product` with the
+target's membership before returning it.
 
 **`parser`** — all HTML parsing lives here. `element_text` joins
 `<br>`-separated lines with `", "` and collapses whitespace, working around
@@ -168,12 +170,17 @@ one-time migration for pre-split databases only.
 
 **Invariants future jobs must not break**
 
-- **Empty never clobbers non-empty (companies only).** Company upserts only
-  overwrite a column when the incoming value is non-empty (`db.rs:190-199`). A
-  listing pass that lacks modal fields must not wipe them. Product upserts do
-  *not* follow this rule: `holder` and `expiry_date` are overwritten
-  unconditionally on conflict (`db.rs:287-289`), because a product's listing
-  row is always authoritative for those two fields.
+- **Empty never clobbers non-empty (companies only).** The rule has two halves.
+  *Within a run*, `Company::fill_from` (`records.rs`) lets the modal's
+  non-empty fields win and fills the gaps from the listing. *Across runs*, the
+  upsert's `CASE` guards (`db.rs:190-199`) keep a stored non-empty value when
+  the incoming one is empty — run 2's listing pass must not wipe run 1's modal
+  fields. Product upserts do *not* follow this rule: `holder` and `expiry_date`
+  are overwritten unconditionally on conflict (`db.rs:287-289`), because a
+  product's listing row is always authoritative for those two fields.
+- **The listing name is the company's identity.** `fill_from` never takes
+  `name` from the modal; the modal may spell a name differently, and rewriting
+  it would split one company into two rows under the `name`-unique key.
 - **`companies` uniqueness is by `name` alone.** Adding category to the key
   would re-introduce duplicates across categories.
 - **`company_id` is mandatory.** A product whose holder doesn't resolve to a
@@ -238,6 +245,8 @@ one-time migration for pre-split databases only.
 | D10 | The Portal seam owns URL shapes and the ignored `hdnCounter` | Callers pass a `comp_code`, not a URL; `search` sends `hdnCounter="0"` internally. Keeps protocol decisions inside the seam. | `listing` building modal URLs from `Portal::base()`; a caller-visible `counter` parameter. |
 | D11 | Category membership travels on the `Product` record | The record is self-describing; `insert_products` takes records alone. `listing` stamps it (the parser stays target-free). | Threading `(category, ty)` from `main` through `listing` into `db`. |
 | D12 | In-memory product dedup key is `(name, brand, holder)` | Matches the persistence identity `(company_id, name, brand)`, with `holder` standing in for `company_id`; expiry is data, not identity. | Deduping by `(name, brand, holder, expiry_date)` — let two rows differing only in expiry collide in the upsert. |
+| D13 | `Company::fill_from` owns within-run enrichment precedence | One named, unit-testable operation; the modal's non-empty fields win, the listing fills gaps. The SQL `CASE` keeps the cross-run half. | Inline merge in `listing` (no unit seam); removing the SQL `CASE` (would wipe stored fields on a later listing pass). |
+| D14 | The listing name is the company identity; the modal never rewrites it | `companies` is unique on `name`; a differently-spelled modal name would otherwise create a duplicate row. | Modal name wins — silently splits one company into two. |
 
 ## 11. Forward roadmap
 
