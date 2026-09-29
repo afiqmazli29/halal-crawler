@@ -14,14 +14,14 @@ Requires Rust 1.85+ (edition 2024) and a running PostgreSQL instance.
 ## How it works
 
 1. Seed a PHP session on the portal.
-2. For each category, search each letter `a`–`z`: company listings (`ty=CO`) paginate via the `hdnCounter` the portal echoes; subcategory listings (products, premises, …) advance on the page parameter using the total-page count from page one.
+2. For each category, search each letter `a`–`z`: company listings (`ty=CO`) and subcategory listings (products, premises, …) both paginate on the `page` parameter, using the total-page count announced on page one.
 3. Each company row in the listing carries an `onclick="openModal('directory/slm_viewdetail.php?comp_code=…', …)"` link. The `comp_code` is extracted, and each company's modal detail page (`/directory/slm_viewdetail.php?comp_code=…&type=C`) is fetched concurrently to enrich the company record (phone, fax, e-mail, website, reference no., officer) and scrape its **Product / Menu List**.
 4. Insert the records into the `companies`, `products`, and `product_categories` tables, then print a few sample rows.
 
 The modal parsing currently targets the detail-page layout used by Barang
-Gunaan, Farmaseutikal, International, Kosmetik & Dandanan Diri, Peranti
-Perubatan, and Produk Makanan/Minuman. Other categories' modal layouts may
-differ and need separate handling.
+Gunaan, Farmaseutikal, Kosmetik & Dandanan Diri, Peranti Perubatan, and Produk
+Makanan/Minuman — the categories in `company_strategies()`. Other categories'
+modal layouts may differ and need separate handling.
 
 ## Database
 
@@ -44,10 +44,10 @@ Override it via the `DATABASE_URL` environment variable.
 | `address` | `TEXT` | Full address |
 | `postcode` | `TEXT` | Postcode parsed from the address |
 | `state` | `TEXT` | State parsed from the address |
-| `phone_no` | `TEXT` | Phone number (not yet scraped) |
-| `fax_no` | `TEXT` | Fax number (not yet scraped) |
-| `email` | `TEXT` | Email (not yet scraped) |
-| `website` | `TEXT` | Website URL (not yet scraped) |
+| `phone_no` | `TEXT` | Phone number (from the modal detail page) |
+| `fax_no` | `TEXT` | Fax number (from the modal detail page) |
+| `email` | `TEXT` | Email (from the modal detail page) |
+| `website` | `TEXT` | Website URL (from the modal detail page) |
 | `reference_no` | `TEXT` | Halal reference number |
 | `officer` | `TEXT` | Responsible officer(s) (`<br>`-joined with `, `) |
 | `comp_code` | `TEXT` | Portal company code from the listing's modal link |
@@ -132,13 +132,13 @@ thousands of pages. `HALAL_MAX_PAGES=N` overrides the cap for any build;
 | File | Purpose |
 |------|---------|
 | `main.rs` | Entrypoint. Seeds the portal session, crawls companies then subcategory listings, inserts, prints sample rows. |
-| `portal.rs` | The Portal seam: base URL, PHP session, semaphore, POST search, GET/retry. Tests substitute an httpmock server via `Portal::new(base_url)`. |
-| `listing.rs` | The listing fetcher: `fetch_companies` (hdnCounter pagination, name dedup) and `fetch_subcategory` (page-param pagination). Hides the crawl protocols. |
-| `parser.rs` | HTML extractors: `parse_table` (company spans), `parse_product_table` (product rows), `extract_counter`, `extract_total_pages`. |
-| `records.rs` | Typed `Company`/`Product` with `from_value` adapters owning the portal's Malay+English key variants. |
+| `portal.rs` | The Portal seam: base URL, PHP session, semaphore, POST search (retries 3×), GET. Tests substitute an httpmock server via `Portal::new(base_url)`. |
+| `listing.rs` | The listing fetcher: `fetch_companies` (name dedup), `fetch_subcategory` (key dedup), and `fetch_company_modals` — all sharing `crawl`/`letter_crawl` (page-param pagination). |
+| `parser.rs` | HTML extractors: `parse_table` (company spans + `comp_code`), `parse_product_table` (product rows), `parse_modal` (detail page), `extract_total_pages`, `extract_postcode`, `extract_state`. |
+| `records.rs` | Typed `Company`/`Product`. `from_value`/`pick_str` are test-only helpers; production parsing builds the structs directly in `parser.rs`. |
 | `db.rs` | PostgreSQL schema init + upsert inserts + `sample_companies`. |
 | `config.rs` | Category strategy lists (`company_strategies`, `other_strategies`). |
-| `constants.rs` | `MAX_CONCURRENT`, `DATA_PARAM`, `STATES`. |
+| `constants.rs` | `MAX_CONCURRENT`, `DEBUG_MAX_PAGES_PER_LETTER`, `DATA_PARAM`, `STATES`, `max_pages_per_letter`. |
 
 The domain glossary lives in `CONTEXT.md`. The technical design — module
 contracts, data-model invariants, decision log, and forward roadmap — lives in

@@ -77,8 +77,8 @@ pub fn modal_url(base: &str, comp_code: &str) -> String {
 /// Fetch and parse modal detail pages for a batch of companies concurrently.
 /// Each company's `comp_code` is used to fetch its modal page, which returns
 /// enriched company data (phone, fax, email, website, etc.) and products.
-/// Products are returned with the category/subcategory appended to their
-/// `holder` for traceability (or you can attach them separately).
+/// Products are returned as parsed; their category/subcategory membership is
+/// attached later, at insert time, via the `product_categories` table.
 ///
 /// Companies without a comp_code are skipped (left unchanged).
 ///
@@ -146,9 +146,6 @@ pub async fn fetch_company_modals(
 fn semaphore(n: usize) -> Arc<tokio::sync::Semaphore> {
     Arc::new(tokio::sync::Semaphore::new(n))
 }
-
-/// The shared crawl: one task per letter, each letter paginating from
-/// page 1 to the total announced by the portal on page 1.
 
 /// The shared crawl: one task per letter, each letter paginating from
 /// page 1 to the total announced by the portal on page 1.

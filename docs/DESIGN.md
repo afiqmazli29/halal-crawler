@@ -64,13 +64,13 @@ The crate is a lib + bin: `src/lib.rs` exposes the `halal_crawler` crate,
 
 | Module | Responsibility |
 |--------|----------------|
-| `portal.rs` | The Portal seam: base URL, PHP session, browser-shaped client, semaphore, POST `search` (retries 3× with backoff), `get`, `get_retry`. |
+| `portal.rs` | The Portal seam: base URL, PHP session, browser-shaped client, semaphore, POST `search` (retries 3× with backoff), `get`. `get_retry` exists but is currently unused. |
 | `listing.rs` | `fetch_companies` (name-dedup), `fetch_subcategory` (key-dedup), `fetch_company_modals`, and the shared `crawl`/`letter_crawl`. Hides pagination and concurrency. |
 | `parser.rs` | All HTML extraction: `parse_table`, `parse_product_table`, `parse_modal`, `extract_total_pages`, `extract_postcode`, `extract_state`. |
 | `records.rs` | `Company` / `Product` types. `from_value`/`pick_str` are test-only helpers; production parsing builds the structs directly in `parser.rs`. |
-| `db.rs` | Schema init, upsert inserts, `resolve_company`, `start_scrap`/`finish_scrap`, `sample_companies`. |
+| `db.rs` | Schema init, upsert inserts, private `resolve_company`, `start_scrap`/`finish_scrap`, `sample_companies`. |
 | `config.rs` | `company_strategies()` / `other_strategies()` — the (category, ty) target lists. |
-| `constants.rs` | `MAX_CONCURRENT`, `DATA_PARAM`, `STATES`, `max_pages_per_letter`. |
+| `constants.rs` | `MAX_CONCURRENT`, `DEBUG_MAX_PAGES_PER_LETTER`, `DATA_PARAM`, `STATES`, `max_pages_per_letter`. |
 | `types.rs` | `Error` alias, `error_chain`, `SubStrategy`. |
 
 ## 3. Domain model
@@ -114,8 +114,9 @@ total in a `Total Record : … From N` line (`extract_total_pages`).
 
 **Modal detail** — `/directory/slm_viewdetail.php?comp_code=<code>&type=C`
 (`listing::modal_url`). Layout is verified only for Barang Gunaan,
-Farmaseutikal, International, Kosmetik & Dandanan Diri, Peranti Perubatan, and
-Produk Makanan/Minuman; other categories may need separate handling (F4).
+Farmaseutikal, Kosmetik & Dandanan Diri, Peranti Perubatan, and Produk
+Makanan/Minuman — the categories in `config::company_strategies()`; other
+layouts may need separate handling (F4).
 
 **Verified vs. assumed** — the POST search and page-param pagination are
 verified live. The modal layout is verified for the categories above only.
@@ -133,8 +134,9 @@ records; they never learn about `Total Record` lines or the page parameter.
 `crawl` spawns one task per letter; `letter_crawl` fetches page 1, reads the
 total, then fetches the rest concurrently. A failing letter is logged and
 skipped, never aborting the category. `fetch_company_modals` fetches modal
-pages concurrently under a semaphore and merges modal fields over listing
-fields, keeping the listing's `comp_code`.
+pages concurrently, merging modal fields over listing fields and keeping the
+listing's `comp_code`; products are returned as parsed — category/subcategory
+membership is attached later, at insert time, via `product_categories`.
 
 **`parser`** — all HTML parsing lives here. `element_text` joins
 `<br>`-separated lines with `", "` and collapses whitespace, working around
@@ -160,9 +162,12 @@ one-time migration for pre-split databases only.
 
 **Invariants future jobs must not break**
 
-- **Empty never clobbers non-empty.** Company upserts only overwrite a column
-  when the incoming value is non-empty (`db.rs:190-199`). A listing pass that
-  lacks modal fields must not wipe them.
+- **Empty never clobbers non-empty (companies only).** Company upserts only
+  overwrite a column when the incoming value is non-empty (`db.rs:190-199`). A
+  listing pass that lacks modal fields must not wipe them. Product upserts do
+  *not* follow this rule: `holder` and `expiry_date` are overwritten
+  unconditionally on conflict (`db.rs:287-289`), because a product's listing
+  row is always authoritative for those two fields.
 - **`companies` uniqueness is by `name` alone.** Adding category to the key
   would re-introduce duplicates across categories.
 - **`company_id` is mandatory.** A product whose holder doesn't resolve to a
@@ -173,11 +178,17 @@ one-time migration for pre-split databases only.
 
 ## 7. Concurrency & reliability
 
-- A single semaphore (`MAX_CONCURRENT = 5`) gates every portal request, shared
-  across letters, pages, and modal fetches.
-- `search` retries transport errors 3× with exponential backoff; `get_retry`
-  retries server errors and timeouts. The portal drops connections under
-  concurrent load, so retries are load-bearing.
+- Concurrency is gated by two semaphores. The Portal owns one
+  (`MAX_CONCURRENT = 5`, `portal.rs:51`) that every request acquires; modal
+  fetches add a second, local one (`fetch_company_modals`, `listing.rs:91`), so
+  a modal GET is gated twice. The local one is redundant today — every modal
+  fetch goes through `Portal::get`, which already acquires the Portal's
+  semaphore.
+- `search` retries transport errors 3× with exponential backoff; the portal
+  drops connections under concurrent load, so those retries are load-bearing.
+  Modal fetches use plain `get`, which does **not** retry (`get_retry` exists
+  but has no call sites) — a dropped modal connection currently loses that
+  company's enrichment for the run.
 - Per-letter and per-modal failures are isolated: logged via
   `types::error_chain` (reqwest hides its real cause behind `Display`) and
   skipped. A single bad letter never aborts a category.
