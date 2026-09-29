@@ -1,48 +1,79 @@
 use halal_crawler::config;
+use halal_crawler::types::Phase;
 
 #[test]
-fn test_company_strategies_count() {
-    let s = config::company_strategies();
-    assert_eq!(s.len(), 9);
+fn test_targets_cover_both_phases() {
+    let targets = config::targets();
+    assert!(targets.iter().any(|t| t.phase == Phase::Companies));
+    assert!(targets.iter().any(|t| t.phase == Phase::Products));
 }
 
 #[test]
-fn test_company_strategies_all_have_co_subcode() {
-    for s in &config::company_strategies() {
-        assert_eq!(
-            s.sub_code, "CO",
-            "{} has sub_code={}",
-            s.category_code, s.sub_code
+fn test_company_targets_all_have_co_ty() {
+    for t in config::targets()
+        .iter()
+        .filter(|t| t.phase == Phase::Companies)
+    {
+        assert_eq!(t.ty, "CO", "{} has ty={}", t.category_code, t.ty);
+    }
+}
+
+#[test]
+fn test_product_targets_never_have_co_ty() {
+    for t in config::targets()
+        .iter()
+        .filter(|t| t.phase == Phase::Products)
+    {
+        assert_ne!(t.ty, "CO", "{} should not be CO", t.category_code);
+    }
+}
+
+#[test]
+fn test_targets_have_codes() {
+    for t in &config::targets() {
+        assert!(!t.category_code.is_empty());
+        assert!(!t.ty.is_empty());
+    }
+}
+
+#[test]
+fn test_product_targets_have_unique_ty_codes() {
+    let targets = config::targets();
+    let mut codes: Vec<&str> = targets
+        .iter()
+        .filter(|t| t.phase == Phase::Products)
+        .map(|t| t.ty)
+        .collect();
+    let total = codes.len();
+    codes.sort();
+    codes.dedup();
+    assert_eq!(codes.len(), total);
+}
+
+#[test]
+fn test_label_is_non_empty_for_every_target() {
+    for t in &config::targets() {
+        let label = config::label(t);
+        assert!(!label.is_empty(), "empty label for {}", t.category_code);
+    }
+}
+
+#[test]
+fn test_company_label_contains_category_code() {
+    for t in config::targets()
+        .iter()
+        .filter(|t| t.phase == Phase::Companies)
+    {
+        let label = config::label(t);
+        assert!(
+            label.contains(t.category_code),
+            "label missing code: {label}"
         );
     }
 }
 
 #[test]
-fn test_company_strategies_have_codes_and_names() {
-    for s in &config::company_strategies() {
-        assert!(!s.category_code.is_empty());
-        assert!(!s.category_name.is_empty());
-    }
-}
-
-#[test]
-fn test_other_strategies_count() {
-    let s = config::other_strategies();
-    assert_eq!(s.len(), 9);
-}
-
-#[test]
-fn test_other_strategies_no_co_subcode() {
-    for s in &config::other_strategies() {
-        assert_ne!(s.sub_code, "CO", "{} should not be CO", s.category_code);
-    }
-}
-
-#[test]
-fn test_other_strategies_have_unique_codes() {
-    let s = config::other_strategies();
-    let mut codes: Vec<&str> = s.iter().map(|x| x.sub_code).collect();
-    codes.sort();
-    codes.dedup();
-    assert_eq!(codes.len(), 9);
+fn test_phase_as_str_matches_scrap_log_values() {
+    assert_eq!(Phase::Companies.as_str(), "companies");
+    assert_eq!(Phase::Products.as_str(), "products");
 }

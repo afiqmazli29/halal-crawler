@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use halal_crawler::{config, constants, db, listing, portal, types};
-use types::Error;
+use types::{Error, Phase};
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -26,7 +26,15 @@ async fn main() -> Result<(), Error> {
     println!("  getting session...");
     portal.init_session().await?;
 
-    let company_strategies = config::company_strategies();
+    let targets = config::targets();
+    let company_targets: Vec<_> = targets
+        .iter()
+        .filter(|t| t.phase == Phase::Companies)
+        .collect();
+    let product_targets: Vec<_> = targets
+        .iter()
+        .filter(|t| t.phase == Phase::Products)
+        .collect();
     let mut total_companies = 0usize;
     let mut total_products = 0usize;
 
@@ -34,16 +42,15 @@ async fn main() -> Result<(), Error> {
     //    company's modal detail page is fetched for enriched fields and
     //    its product list ────────────────────────────────────────────────
     println!("\n═══ PHASE 1: COMPANIES (a–z search + detail modals) ═══");
-    for (idx, s) in company_strategies.iter().enumerate() {
+    for (idx, s) in company_targets.iter().enumerate() {
         println!(
-            "\n┌─ [{}/{}] {} ({})",
+            "\n┌─ [{}/{}] {}",
             idx + 1,
-            company_strategies.len(),
-            s.category_name,
-            s.category_code
+            company_targets.len(),
+            config::label(s)
         );
 
-        let log_id = db::start_scrap(&pool, s.category_code, "companies").await?;
+        let log_id = db::start_scrap(&pool, s.category_code, s.phase.as_str()).await?;
         match listing::fetch_companies(&portal, s, max_pages).await {
             Ok(records) => {
                 // Upsert what the listing page gave us first so every
@@ -69,13 +76,9 @@ async fn main() -> Result<(), Error> {
                         upd_total += upd2;
 
                         if !all_products.is_empty() {
-                            let (pins, pupd) = db::insert_products(
-                                &pool,
-                                &all_products,
-                                s.category_code,
-                                s.sub_code,
-                            )
-                            .await?;
+                            let (pins, pupd) =
+                                db::insert_products(&pool, &all_products, s.category_code, s.ty)
+                                    .await?;
                             println!("│  {pins} products inserted, {pupd} products updated");
                             total_products += pins + pupd;
                         }
@@ -95,23 +98,20 @@ async fn main() -> Result<(), Error> {
     }
 
     // ── Phase 2: Subcategory listings (products, premises, …) ─────────
-    let other_strategies = config::other_strategies();
-
     println!("\n═══ PHASE 2: SUBCATEGORY LISTINGS ═══");
-    for (idx, s) in other_strategies.iter().enumerate() {
+    for (idx, s) in product_targets.iter().enumerate() {
         println!(
-            "\n┌─ [{}/{}] {} — {}",
+            "\n┌─ [{}/{}] {}",
             idx + 1,
-            other_strategies.len(),
-            s.category_name,
-            s.sub_name
+            product_targets.len(),
+            config::label(s)
         );
 
-        let log_id = db::start_scrap(&pool, s.category_code, "products").await?;
+        let log_id = db::start_scrap(&pool, s.category_code, s.phase.as_str()).await?;
         match listing::fetch_subcategory(&portal, s, max_pages).await {
             Ok(records) => {
                 let (inserted, updated) =
-                    db::insert_products(&pool, &records, s.category_code, s.sub_code).await?;
+                    db::insert_products(&pool, &records, s.category_code, s.ty).await?;
                 db::finish_scrap(&pool, log_id, inserted, updated).await?;
                 total_products += inserted + updated;
                 println!("└─ {inserted} inserted, {updated} updated → DB");

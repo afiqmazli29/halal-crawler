@@ -20,7 +20,7 @@ Requires Rust 1.85+ (edition 2024) and a running PostgreSQL instance.
 
 The modal parsing currently targets the detail-page layout used by Barang
 Gunaan, Farmaseutikal, Kosmetik & Dandanan Diri, Peranti Perubatan, and Produk
-Makanan/Minuman — the categories in `company_strategies()`. Other categories'
+Makanan/Minuman — the company targets in `config::targets()`. Other categories'
 modal layouts may differ and need separate handling.
 
 ## Database
@@ -137,7 +137,7 @@ thousands of pages. `HALAL_MAX_PAGES=N` overrides the cap for any build;
 | `parser.rs` | HTML extractors: `parse_table` (company spans + `comp_code`), `parse_product_table` (product rows), `parse_modal` (detail page), `extract_total_pages`, `extract_postcode`, `extract_state`. |
 | `records.rs` | Typed `Company`/`Product`. `from_value`/`pick_str` are test-only helpers; production parsing builds the structs directly in `parser.rs`. |
 | `db.rs` | PostgreSQL schema init + upsert inserts + `sample_companies`. |
-| `config.rs` | Category strategy lists (`company_strategies`, `other_strategies`). |
+| `config.rs` | The crawl target list (`targets()`) and progress labels (`label()`). |
 | `constants.rs` | `MAX_CONCURRENT`, `DEBUG_MAX_PAGES_PER_LETTER`, `DATA_PARAM`, `STATES`, `max_pages_per_letter`. |
 
 The domain glossary lives in `CONTEXT.md`. The technical design — module

@@ -1,119 +1,136 @@
-use crate::types::SubStrategy;
+use crate::types::{CrawlTarget, Phase};
 
-pub fn company_strategies() -> Vec<SubStrategy> {
+/// Every crawl target, in run order: phase `Companies` first, then phase
+/// `Products`. This single list is the one place "what runs" is readable.
+pub fn targets() -> Vec<CrawlTarget> {
     vec![
-        SubStrategy {
+        // ── Phase Companies: each category's `ty=CO` listing ──────────
+        CrawlTarget {
             category_code: "BG",
-            category_name: "Barang Gunaan",
-            sub_code: "CO",
-            sub_name: "Syarikat",
+            ty: "CO",
+            phase: Phase::Companies,
         },
-        SubStrategy {
+        CrawlTarget {
             category_code: "FM",
-            category_name: "Farmaseutikal",
-            sub_code: "CO",
-            sub_name: "Syarikat",
+            ty: "CO",
+            phase: Phase::Companies,
         },
-        SubStrategy {
+        CrawlTarget {
             category_code: "KO",
-            category_name: "Kosmetik & Dandanan",
-            sub_code: "CO",
-            sub_name: "Syarikat",
+            ty: "CO",
+            phase: Phase::Companies,
         },
-        SubStrategy {
+        CrawlTarget {
             category_code: "MD",
-            category_name: "Peranti Perubatan",
-            sub_code: "CO",
-            sub_name: "Syarikat",
+            ty: "CO",
+            phase: Phase::Companies,
         },
-        SubStrategy {
+        CrawlTarget {
             category_code: "OEM",
-            category_name: "OEM",
-            sub_code: "CO",
-            sub_name: "Syarikat",
+            ty: "CO",
+            phase: Phase::Companies,
         },
-        SubStrategy {
+        CrawlTarget {
             category_code: "PE",
-            category_name: "Premis Makanan",
-            sub_code: "CO",
-            sub_name: "Syarikat",
+            ty: "CO",
+            phase: Phase::Companies,
         },
-        SubStrategy {
+        CrawlTarget {
             category_code: "PL",
-            category_name: "Logistik",
-            sub_code: "CO",
-            sub_name: "Syarikat",
+            ty: "CO",
+            phase: Phase::Companies,
         },
-        SubStrategy {
+        CrawlTarget {
             category_code: "PR",
-            category_name: "Produk Makanan/Minuman",
-            sub_code: "CO",
-            sub_name: "Syarikat",
+            ty: "CO",
+            phase: Phase::Companies,
         },
-        SubStrategy {
+        CrawlTarget {
             category_code: "PS",
-            category_name: "Rumah Sembelihan",
-            sub_code: "CO",
-            sub_name: "Syarikat",
+            ty: "CO",
+            phase: Phase::Companies,
+        },
+        // ── Phase Products: subcategory listings (products, premises, …) ─
+        CrawlTarget {
+            category_code: "BG",
+            ty: "BG",
+            phase: Phase::Products,
+        },
+        CrawlTarget {
+            category_code: "FM",
+            ty: "FM",
+            phase: Phase::Products,
+        },
+        CrawlTarget {
+            category_code: "KO",
+            ty: "KO",
+            phase: Phase::Products,
+        },
+        CrawlTarget {
+            category_code: "MD",
+            ty: "MD",
+            phase: Phase::Products,
+        },
+        CrawlTarget {
+            category_code: "OEM",
+            ty: "OEM",
+            phase: Phase::Products,
+        },
+        CrawlTarget {
+            category_code: "PR",
+            ty: "PR",
+            phase: Phase::Products,
+        },
+        CrawlTarget {
+            category_code: "PE",
+            ty: "HO",
+            phase: Phase::Products,
+        },
+        CrawlTarget {
+            category_code: "PE",
+            ty: "PE",
+            phase: Phase::Products,
+        },
+        CrawlTarget {
+            category_code: "PS",
+            ty: "RS",
+            phase: Phase::Products,
         },
     ]
 }
 
-pub fn other_strategies() -> Vec<SubStrategy> {
-    vec![
-        SubStrategy {
-            category_code: "BG",
-            category_name: "Barang Gunaan",
-            sub_code: "BG",
-            sub_name: "Barang Gunaan",
-        },
-        SubStrategy {
-            category_code: "FM",
-            category_name: "Farmaseutikal",
-            sub_code: "FM",
-            sub_name: "Farmaseutikal",
-        },
-        SubStrategy {
-            category_code: "KO",
-            category_name: "Kosmetik & Dandanan",
-            sub_code: "KO",
-            sub_name: "Kosmetik",
-        },
-        SubStrategy {
-            category_code: "MD",
-            category_name: "Peranti Perubatan",
-            sub_code: "MD",
-            sub_name: "Peranti Perubatan",
-        },
-        SubStrategy {
-            category_code: "OEM",
-            category_name: "OEM",
-            sub_code: "OEM",
-            sub_name: "OEM",
-        },
-        SubStrategy {
-            category_code: "PR",
-            category_name: "Produk Makanan/Minuman",
-            sub_code: "PR",
-            sub_name: "Produk",
-        },
-        SubStrategy {
-            category_code: "PE",
-            category_name: "Premis Makanan",
-            sub_code: "HO",
-            sub_name: "Hotel & Resort",
-        },
-        SubStrategy {
-            category_code: "PE",
-            category_name: "Premis Makanan",
-            sub_code: "PE",
-            sub_name: "Premis Makanan",
-        },
-        SubStrategy {
-            category_code: "PS",
-            category_name: "Rumah Sembelihan",
-            sub_code: "RS",
-            sub_name: "Rumah Sembelih",
-        },
-    ]
+/// The human-readable label for a target, used in progress output. Lives here
+/// beside the codes so the code→name mapping stays in one module.
+pub fn label(target: &CrawlTarget) -> String {
+    let category = match target.category_code {
+        "BG" => "Barang Gunaan",
+        "FM" => "Farmaseutikal",
+        "KO" => "Kosmetik & Dandanan",
+        "MD" => "Peranti Perubatan",
+        "OEM" => "OEM",
+        "PE" => "Premis Makanan",
+        "PL" => "Logistik",
+        "PR" => "Produk Makanan/Minuman",
+        "PS" => "Rumah Sembelihan",
+        other => other,
+    };
+
+    match target.phase {
+        Phase::Companies => format!("{category} ({})", target.category_code),
+        Phase::Products => {
+            let sub = match target.ty {
+                "BG" => "Barang Gunaan",
+                "FM" => "Farmaseutikal",
+                "KO" => "Kosmetik",
+                "MD" => "Peranti Perubatan",
+                "OEM" => "OEM",
+                "PR" => "Produk",
+                "HO" => "Hotel & Resort",
+                "PE" => "Premis Makanan",
+                "RS" => "Rumah Sembelih",
+                other => other,
+            };
+            format!("{category} — {sub}")
+        }
+    }
 }

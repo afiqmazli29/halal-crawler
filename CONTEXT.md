@@ -36,6 +36,14 @@ _Avoid_: row, JSON
 One category's full sweep — all letters, all pages — producing records.
 _Avoid_: scrape run, job
 
+**Crawl target**:
+The unit a Crawl is scheduled over: a (category, ty) pair plus the phase that crawls it.
+_Avoid_: strategy, job spec
+
+**Phase**:
+Which of the two crawl passes a Crawl target belongs to — `Companies` (letter search + modal enrichment) or `Products` (subcategory listings).
+_Avoid_: stage, pass
+
 **hdnCounter**:
 A hidden form field the portal echoes back as a record-count display; pagination is driven by the page parameter alone, with the total page count announced on page one (`Total Record : … From N`).
 _Avoid_: cursor, offset

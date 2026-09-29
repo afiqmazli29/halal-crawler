@@ -13,11 +13,30 @@ pub fn error_chain(e: &Error) -> String {
     out
 }
 
-/// A crawl target: a (category, ty) pair on the portal plus the
-/// display names used in progress output.
-pub struct SubStrategy {
+/// The phase a crawl target belongs to. Phase `Companies` discovers companies
+/// (and enriches them from their modal detail pages); phase `Products` sweeps
+/// subcategory listings (products, premises, …).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    Companies,
+    Products,
+}
+
+impl Phase {
+    /// The value persisted in `scrap_log.phase`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Phase::Companies => "companies",
+            Phase::Products => "products",
+        }
+    }
+}
+
+/// A crawl target: a (category, ty) pair on the Portal plus the phase that
+/// crawls it. Display names live in `config::label`, not here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CrawlTarget {
     pub category_code: &'static str,
-    pub category_name: &'static str,
-    pub sub_code: &'static str,
-    pub sub_name: &'static str,
+    pub ty: &'static str,
+    pub phase: Phase,
 }

@@ -2,25 +2,24 @@ use httpmock::prelude::*;
 use serde_json::json;
 
 use halal_crawler::records::{Company, Product};
-use halal_crawler::{db, listing, types};
+use halal_crawler::types::{CrawlTarget, Phase};
+use halal_crawler::{db, listing};
 
 mod common;
 
-fn company_strategy() -> types::SubStrategy {
-    types::SubStrategy {
+fn company_target() -> CrawlTarget {
+    CrawlTarget {
         category_code: "BG",
-        category_name: "Barang Gunaan",
-        sub_code: "CO",
-        sub_name: "Syarikat",
+        ty: "CO",
+        phase: Phase::Companies,
     }
 }
 
-fn product_strategy() -> types::SubStrategy {
-    types::SubStrategy {
+fn product_target() -> CrawlTarget {
+    CrawlTarget {
         category_code: "PR",
-        category_name: "Produk Makanan",
-        sub_code: "PR",
-        sub_name: "Produk",
+        ty: "PR",
+        phase: Phase::Products,
     }
 }
 
@@ -264,7 +263,7 @@ async fn test_scrape_companies_dedups_across_letters() {
             .body(html);
     });
 
-    let records = listing::fetch_companies(&ctx.portal, &company_strategy(), None)
+    let records = listing::fetch_companies(&ctx.portal, &company_target(), None)
         .await
         .expect("scrape");
 
@@ -310,7 +309,7 @@ async fn test_scrape_companies_paginates_via_page_param() {
             .body("<html><body>empty</body></html>");
     });
 
-    let records = listing::fetch_companies(&ctx.portal, &company_strategy(), None)
+    let records = listing::fetch_companies(&ctx.portal, &company_target(), None)
         .await
         .expect("scrape");
 
@@ -332,7 +331,7 @@ async fn test_scrape_companies_parses_address_fields() {
             .body(html);
     });
 
-    let records = listing::fetch_companies(&ctx.portal, &company_strategy(), None)
+    let records = listing::fetch_companies(&ctx.portal, &company_target(), None)
         .await
         .expect("scrape");
 
@@ -370,7 +369,7 @@ async fn test_fetch_subcategory_mocked() {
             .body("<html><body>empty</body></html>");
     });
 
-    let records = listing::fetch_subcategory(&ctx.portal, &product_strategy(), None)
+    let records = listing::fetch_subcategory(&ctx.portal, &product_target(), None)
         .await
         .expect("scrape");
 
@@ -419,7 +418,7 @@ async fn test_fetch_subcategory_dedups_by_name_brand_holder_expiry() {
             .body("<html><body>empty</body></html>");
     });
 
-    let records = listing::fetch_subcategory(&ctx.portal, &product_strategy(), None)
+    let records = listing::fetch_subcategory(&ctx.portal, &product_target(), None)
         .await
         .expect("scrape");
 
@@ -470,7 +469,7 @@ async fn test_fetch_subcategory_paginates_via_page_param() {
             .body("<html><body>empty</body></html>");
     });
 
-    let records = listing::fetch_subcategory(&ctx.portal, &product_strategy(), None)
+    let records = listing::fetch_subcategory(&ctx.portal, &product_target(), None)
         .await
         .expect("scrape");
 
@@ -491,7 +490,7 @@ async fn test_fetch_companies_empty_listing_returns_empty() {
             .body("<html><body>No spans here</body></html>");
     });
 
-    let records = listing::fetch_companies(&ctx.portal, &company_strategy(), None)
+    let records = listing::fetch_companies(&ctx.portal, &company_target(), None)
         .await
         .expect("scrape");
 
@@ -502,11 +501,10 @@ async fn test_fetch_companies_empty_listing_returns_empty() {
 async fn test_fetch_subcategory_no_records_returns_empty() {
     let ctx = common::setup_mock().await;
 
-    let strategy = types::SubStrategy {
+    let target = CrawlTarget {
         category_code: "ZZ",
-        category_name: "Unknown",
-        sub_code: "ZZ",
-        sub_name: "Unknown",
+        ty: "ZZ",
+        phase: Phase::Products,
     };
 
     ctx.server.mock(|when, then| {
@@ -516,7 +514,7 @@ async fn test_fetch_subcategory_no_records_returns_empty() {
             .body("<html><body>Nothing here</body></html>");
     });
 
-    let records = listing::fetch_subcategory(&ctx.portal, &strategy, None)
+    let records = listing::fetch_subcategory(&ctx.portal, &target, None)
         .await
         .expect("scrape");
     assert_eq!(records.len(), 0);

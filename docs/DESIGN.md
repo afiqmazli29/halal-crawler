@@ -69,9 +69,9 @@ The crate is a lib + bin: `src/lib.rs` exposes the `halal_crawler` crate,
 | `parser.rs` | All HTML extraction: `parse_table`, `parse_product_table`, `parse_modal`, `extract_total_pages`, `extract_postcode`, `extract_state`. |
 | `records.rs` | `Company` / `Product` types. `from_value`/`pick_str` are test-only helpers; production parsing builds the structs directly in `parser.rs`. |
 | `db.rs` | Schema init, upsert inserts, private `resolve_company`, `start_scrap`/`finish_scrap`, `sample_companies`. |
-| `config.rs` | `company_strategies()` / `other_strategies()` — the (category, ty) target lists. |
+| `config.rs` | `targets()` — the single list of (category, ty, phase) crawl targets — plus `label()` for progress output. |
 | `constants.rs` | `MAX_CONCURRENT`, `DEBUG_MAX_PAGES_PER_LETTER`, `DATA_PARAM`, `STATES`, `max_pages_per_letter`. |
-| `types.rs` | `Error` alias, `error_chain`, `SubStrategy`. |
+| `types.rs` | `Error` alias, `error_chain`, `CrawlTarget`, `Phase`. |
 
 ## 3. Domain model
 
@@ -115,7 +115,7 @@ total in a `Total Record : … From N` line (`extract_total_pages`).
 **Modal detail** — `/directory/slm_viewdetail.php?comp_code=<code>&type=C`
 (`listing::modal_url`). Layout is verified only for Barang Gunaan,
 Farmaseutikal, Kosmetik & Dandanan Diri, Peranti Perubatan, and Produk
-Makanan/Minuman — the categories in `config::company_strategies()`; other
+Makanan/Minuman — the categories in `config::targets()`; other
 layouts may need separate handling (F4).
 
 **Verified vs. assumed** — the POST search and page-param pagination are
@@ -129,7 +129,7 @@ against the live portal (F5).
 retry policy. Constructed with `Portal::new(base_url)`; tests substitute an
 httpmock server's base URL. Cheap to clone; copies are passed into tasks.
 
-**`listing`** — a deep module: callers hand over a `SubStrategy` and get
+**`listing`** — a deep module: callers hand over a `CrawlTarget` and get
 records; they never learn about `Total Record` lines or the page parameter.
 `crawl` spawns one task per letter; `letter_crawl` fetches page 1, reads the
 total, then fetches the rest concurrently. A failing letter is logged and

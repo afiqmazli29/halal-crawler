@@ -5,7 +5,7 @@ use tokio::task::JoinSet;
 use crate::parser;
 use crate::portal::Portal;
 use crate::records::{Company, Product};
-use crate::types::{Error, SubStrategy, error_chain};
+use crate::types::{CrawlTarget, Error, error_chain};
 
 /// The directory listing as one deep module: both crawl modes live here,
 /// hiding the pagination protocol, concurrency, and dedup behind two
@@ -21,10 +21,10 @@ use crate::types::{Error, SubStrategy, error_chain};
 /// `None` means the full crawl.
 pub async fn fetch_companies(
     portal: &Portal,
-    strategy: &SubStrategy,
+    target: &CrawlTarget,
     max_pages: Option<u32>,
 ) -> Result<Vec<Company>, Error> {
-    let records = crawl(portal, strategy, max_pages, parser::parse_table).await?;
+    let records = crawl(portal, target, max_pages, parser::parse_table).await?;
 
     let mut seen = HashSet::new();
     let deduped = records
@@ -42,10 +42,10 @@ pub async fn fetch_companies(
 /// `None` means the full crawl.
 pub async fn fetch_subcategory(
     portal: &Portal,
-    strategy: &SubStrategy,
+    target: &CrawlTarget,
     max_pages: Option<u32>,
 ) -> Result<Vec<Product>, Error> {
-    let records = crawl(portal, strategy, max_pages, parser::parse_product_table).await?;
+    let records = crawl(portal, target, max_pages, parser::parse_product_table).await?;
 
     let mut seen = HashSet::new();
     let deduped = records
@@ -151,7 +151,7 @@ fn semaphore(n: usize) -> Arc<tokio::sync::Semaphore> {
 /// page 1 to the total announced by the portal on page 1.
 async fn crawl<T>(
     portal: &Portal,
-    strategy: &SubStrategy,
+    target: &CrawlTarget,
     max_pages: Option<u32>,
     parse: fn(&str) -> Vec<T>,
 ) -> Result<Vec<T>, Error>
@@ -159,8 +159,8 @@ where
     T: Send + 'static,
 {
     let mut set = JoinSet::new();
-    let category = strategy.category_code.to_string();
-    let ty = strategy.sub_code;
+    let category = target.category_code.to_string();
+    let ty = target.ty;
 
     for letter in 'a'..='z' {
         let portal = Portal::clone(portal);
