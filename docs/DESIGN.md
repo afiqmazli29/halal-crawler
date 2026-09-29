@@ -30,22 +30,31 @@ refresh changed rows and add new ones without duplicates.
 The crate is a lib + bin: `src/lib.rs` exposes the `halal_crawler` crate,
 `src/main.rs` is the binary. Tests import `halal_crawler::...`.
 
-`main.rs` runs two phases:
+`main.rs` is thin: it seeds the session and calls
+`crawl::run(&portal, &pool, &config::targets(), max_pages)`, then prints the
+summary from the returned `RunReport`. `crawl::run` runs two phases:
 
-1. **Companies** (`main.rs:33-95`) — for each company category, a letter search
-   (`a`–`z`) discovers each row's `comp_code` from its `onclick` modal link.
-   Listing records are upserted first, then each company's modal detail page is
-   fetched concurrently to enrich fields (phone, fax, e-mail, website,
-   reference no., officer) and scrape its product list. Enriched companies and
-   their products are upserted.
-2. **Subcategory listings** (`main.rs:97-124`) — products/premises per
-   (category, ty) pair, upserted with their category mapping.
+1. **Companies** — for each company target, a letter search (`a`–`z`)
+   discovers each row's `comp_code` from its `onclick` modal link. Listing
+   records are upserted first, then each company's modal detail page is fetched
+   concurrently to enrich fields (phone, fax, e-mail, website, reference no.,
+   officer) and scrape its product list. Enriched companies and their products
+   are upserted.
+2. **Subcategory listings** — products/premises per target, upserted with the
+   category mapping carried on each record.
+
+Each target's `scrap_log` row is opened and closed inside `crawl::run`. A
+failing target is recorded in `RunReport.failures` and skipped, never aborting
+the run.
 
 ```
                  ┌────────────┐
                  │   Portal   │  base URL, PHP session, semaphore, retries
                  └─────┬──────┘
-          search (POST)│  get (modal GET)
+          search (POST)│  fetch_modal (GET)
+                 ┌─────▼──────┐
+                 │   crawl    │  phases + insert ordering + scrap_log
+                 └─────┬──────┘
                  ┌─────▼──────┐
                  │  listing   │  pagination + concurrency + dedup
                  └─────┬──────┘
@@ -56,7 +65,7 @@ The crate is a lib + bin: `src/lib.rs` exposes the `halal_crawler` crate,
                  │  records   │  typed Company / Product
                  └─────┬──────┘
                  ┌─────▼──────┐
-                 │     db     │  schema init + upserts + scrap_log
+                 │     db     │  schema init + upserts
                  └────────────┘
 ```
 
@@ -64,6 +73,7 @@ The crate is a lib + bin: `src/lib.rs` exposes the `halal_crawler` crate,
 
 | Module | Responsibility |
 |--------|----------------|
+| `crawl.rs` | The run orchestration: `run(portal, pool, targets, max_pages) -> RunReport` owns both phases, the insert ordering, and each target's `scrap_log` lifecycle. |
 | `portal.rs` | The Portal seam: base URL, PHP session, browser-shaped client, semaphore, POST `search`, `fetch_modal`, and the one shared retry policy. |
 | `listing.rs` | `fetch_companies` (name-dedup), `fetch_subcategory` (key-dedup), `fetch_company_modals`, and the shared `crawl`/`letter_crawl`. Hides pagination and concurrency. |
 | `parser.rs` | All HTML record extraction: `parse_table`, `parse_product_table`, `parse_modal`, `extract_postcode`, `extract_state`. |
@@ -130,6 +140,11 @@ against the live portal (F5).
 
 ## 5. Module contracts & seams
 
+**`crawl`** — the run orchestration. `run` takes the portal, pool, targets, and
+cap, and returns a `RunReport` (counts + `failures`). It owns the phase order,
+the listing-before-enrichment insert ordering, and each target's `scrap_log`
+open/close. A failed target is recorded and skipped.
+
 **`Portal`** — the only place that knows the base URL, session, headers, URL
 shapes, and retry policy. Its interface is `init_session`, `search`, and
 `fetch_modal`; the raw `get` is private. Constructed with `Portal::new(base_url)`;
@@ -191,7 +206,8 @@ one-time migration for pre-split databases only.
   tracked in `product_categories`, not on the product row. `listing`'s in-memory
   dedup key is `(name, brand, holder)` — the same identity with `holder` standing
   in for `company_id` — so dedup and persistence agree.
-- **`scrap_log` is per category+phase, not per row.**
+- **`scrap_log` is per category+phase, not per row.** The lifecycle is owned by
+  `crawl::run_target`, which opens and closes the row on every branch.
 
 ## 7. Concurrency & reliability
 
@@ -250,6 +266,7 @@ one-time migration for pre-split databases only.
 | D13 | `Company::fill_from` owns within-run enrichment precedence | One named, unit-testable operation; the modal's non-empty fields win, the listing fills gaps. The SQL `CASE` keeps the cross-run half. | Inline merge in `listing` (no unit seam); removing the SQL `CASE` (would wipe stored fields on a later listing pass). |
 | D14 | The listing name is the company identity; the modal never rewrites it | `companies` is unique on `name`; a differently-spelled modal name would otherwise create a duplicate row. | Modal name wins — silently splits one company into two. |
 | D15 | `listing` owns the pagination grammar and cap policy | `total_pages` and `pages_to_fetch` are private to the module that paginates; the parser is for record extraction only. | `extract_total_pages` public in `parser`, tested away from its only caller. |
+| D16 | `crawl::run` owns both phases and the `scrap_log` lifecycle | The binary becomes thin; the run's insert ordering and log open/close are testable through one interface, and failures surface in `RunReport`. | Orchestration in `main.rs` (no test seam); a closure-based `db::with_scrap_log`. |
 
 ## 11. Forward roadmap
 

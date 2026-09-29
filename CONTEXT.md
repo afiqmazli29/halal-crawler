@@ -36,6 +36,10 @@ _Avoid_: row, JSON
 One category's full sweep — all letters, all pages — producing records.
 _Avoid_: scrape run, job
 
+**Run**:
+One execution of the crawler over a set of Crawl targets — both phases, with each target's `scrap_log` lifecycle and a report of counts and failures.
+_Avoid_: scrape run, session
+
 **Crawl target**:
 The unit a Crawl is scheduled over: a (category, ty) pair plus the phase that crawls it.
 _Avoid_: strategy, job spec

@@ -131,7 +131,8 @@ thousands of pages. `HALAL_MAX_PAGES=N` overrides the cap for any build;
 
 | File | Purpose |
 |------|---------|
-| `main.rs` | Entrypoint. Seeds the portal session, crawls companies then subcategory listings, inserts, prints sample rows. |
+| `main.rs` | Entrypoint. Seeds the portal session, calls `crawl::run`, prints the summary from the returned report. |
+| `crawl.rs` | The run orchestration: both phases, insert ordering, and each target's `scrap_log` lifecycle behind `run() -> RunReport`. |
 | `portal.rs` | The Portal seam: base URL, PHP session, semaphore, one shared retry policy, POST `search`, and `fetch_modal`. Tests substitute an httpmock server via `Portal::new(base_url)`. |
 | `listing.rs` | The listing fetcher: `fetch_companies` (name dedup), `fetch_subcategory` (key dedup), and `fetch_company_modals` — all sharing `crawl`/`letter_crawl` (page-param pagination). |
 | `parser.rs` | HTML record extractors: `parse_table` (company spans + `comp_code`), `parse_product_table` (product rows), `parse_modal` (detail page), `extract_postcode`, `extract_state`. |

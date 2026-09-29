@@ -1,5 +1,6 @@
 pub mod config;
 pub mod constants;
+pub mod crawl;
 pub mod db;
 pub mod listing;
 pub mod parser;

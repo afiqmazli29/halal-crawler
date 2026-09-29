@@ -3,7 +3,7 @@ use serde_json::json;
 
 use halal_crawler::records::{Company, Product};
 use halal_crawler::types::{CrawlTarget, Phase};
-use halal_crawler::{db, listing};
+use halal_crawler::{crawl, db, listing};
 
 mod common;
 
@@ -798,4 +798,134 @@ async fn test_db_enrichment_does_not_split_company_on_name_spelling() {
     assert_eq!(phone, "03-5555");
 
     common::cleanup(&ctx.pool, &["tN_ABC Sdn Bhd"], &[]).await;
+}
+
+// ── crawl::run orchestration (httpmock + live PostgreSQL) ────────
+
+#[tokio::test]
+async fn test_run_reports_counts_and_closes_scrap_log() {
+    let mock = common::setup_mock().await;
+    let ctx = common::setup_db().await;
+
+    let company_name = "tRun_Alpha Co";
+    let product_name = "tRun_Product A";
+
+    // Unique category codes so this run's scrap_log rows are identifiable
+    // even while other tests write to scrap_log concurrently.
+    let targets = vec![
+        CrawlTarget {
+            category_code: "ZQ",
+            ty: "CO",
+            phase: Phase::Companies,
+        },
+        CrawlTarget {
+            category_code: "ZR",
+            ty: "ZR",
+            phase: Phase::Products,
+        },
+    ];
+
+    // Phase 1: the letter search returns one company with a modal comp_code.
+    mock.server.mock(|when, then| {
+        when.method(POST)
+            .path("/index.php")
+            .query_param("category", "ZQ")
+            .query_param("cari", "a")
+            .query_param("page", "1");
+        then.status(200)
+            .header("content-type", "text/html")
+            .body(common::listing_html(
+                &[(company_name, "1 Jalan, 50000 KL, Kuala Lumpur")],
+                1,
+            ));
+    });
+    // Its modal enriches the company and yields one product.
+    mock.server.mock(|when, then| {
+        when.method(GET)
+            .path("/directory/slm_viewdetail.php")
+            .query_param("comp_code", "COMP-20230804-000001");
+        then.status(200)
+            .header("content-type", "text/html")
+            .body(format!(
+                "<html><body><table>\
+             <tr><td><b><div align=\"right\">Phone No :</div></b></td>\
+             <td>03-1111</td></tr>\
+             <tr><td colspan=\"2\"><b>Product / Menu List :</b>\
+             <table border=\"1\">\
+             <tr><td align=\"center\">1.</td>\
+             <td class=\"txt\">{product_name}</td>\
+             <td class=\"txt\">{company_name}</td>\
+             <td align=\"center\">15/07/2029</td></tr>\
+             </table></td></tr>\
+             </table></body></html>"
+            ));
+    });
+    // Phase 2: the subcategory listing returns one product.
+    mock.server.mock(|when, then| {
+        when.method(POST)
+            .path("/index.php")
+            .query_param("category", "ZR")
+            .query_param("cari", "a")
+            .query_param("page", "1");
+        then.status(200)
+            .header("content-type", "text/html")
+            .body(common::product_listing_html(
+                &[("tRun_Prod B", "BrandRun", company_name, "2027-01-01")],
+                1,
+            ));
+    });
+    // Every other letter/category returns an empty listing.
+    mock.server.mock(|when, then| {
+        when.method(POST).path("/index.php");
+        then.status(200)
+            .header("content-type", "text/html")
+            .body("<html><body>empty</body></html>");
+    });
+
+    let report = crawl::run(&mock.portal, &ctx.pool, &targets, None)
+        .await
+        .expect("run");
+
+    assert!(
+        report.failures.is_empty(),
+        "failures: {:?}",
+        report.failures
+    );
+    assert!(report.companies_inserted >= 1, "report: {report:?}");
+    assert!(report.products_inserted >= 1, "report: {report:?}");
+
+    // The company was enriched from the modal.
+    let phone: String = sqlx::query_scalar("SELECT phone_no FROM companies WHERE name = $1")
+        .bind(company_name)
+        .fetch_one(&ctx.pool)
+        .await
+        .expect("company row");
+    assert_eq!(phone, "03-1111");
+
+    // This run opened one scrap_log row per target and closed every one.
+    let (total, open): (i64, i64) = sqlx::query_as(
+        "SELECT count(*), count(*) FILTER (WHERE finished_at IS NULL)
+         FROM scrap_log WHERE category_code IN ('ZQ', 'ZR')",
+    )
+    .fetch_one(&ctx.pool)
+    .await
+    .expect("scrap_log");
+    assert_eq!(total, 2, "one row per target");
+    assert_eq!(open, 0, "every scrap_log row was closed");
+
+    let phases: Vec<String> = sqlx::query_scalar(
+        "SELECT phase FROM scrap_log WHERE category_code IN ('ZQ', 'ZR') ORDER BY id",
+    )
+    .fetch_all(&ctx.pool)
+    .await
+    .expect("scrap_log phases");
+    assert_eq!(phases, vec!["companies", "products"]);
+
+    // Clean up the log rows this test created.
+    sqlx::query("DELETE FROM scrap_log WHERE category_code IN ('ZQ', 'ZR')")
+        .execute(&ctx.pool)
+        .await
+        .ok();
+
+    common::cleanup(&ctx.pool, &[company_name], &[product_name, "tRun_Prod B"]).await;
 }
