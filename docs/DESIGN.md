@@ -64,7 +64,7 @@ The crate is a lib + bin: `src/lib.rs` exposes the `halal_crawler` crate,
 
 | Module | Responsibility |
 |--------|----------------|
-| `portal.rs` | The Portal seam: base URL, PHP session, browser-shaped client, semaphore, POST `search` (retries 3× with backoff), `get`. `get_retry` exists but is currently unused. |
+| `portal.rs` | The Portal seam: base URL, PHP session, browser-shaped client, semaphore, POST `search`, `fetch_modal`, and the one shared retry policy. |
 | `listing.rs` | `fetch_companies` (name-dedup), `fetch_subcategory` (key-dedup), `fetch_company_modals`, and the shared `crawl`/`letter_crawl`. Hides pagination and concurrency. |
 | `parser.rs` | All HTML extraction: `parse_table`, `parse_product_table`, `parse_modal`, `extract_total_pages`, `extract_postcode`, `extract_state`. |
 | `records.rs` | `Company` / `Product` types. `from_value`/`pick_str` are test-only helpers; production parsing builds the structs directly in `parser.rs`. |
@@ -109,14 +109,14 @@ with form fields `hdnCounter`, `t`, `a`, `ty=<subcategory code>`.
 `DATA_PARAM` is the base64 directory path in `constants.rs`.
 
 **Pagination** — driven by the `page` parameter alone. The portal ignores
-`hdnCounter`, so the `counter` argument is always `"0"`. Page 1 announces the
+`hdnCounter`, so `search` sends it internally as `"0"`. Page 1 announces the
 total in a `Total Record : … From N` line (`extract_total_pages`).
 
-**Modal detail** — `/directory/slm_viewdetail.php?comp_code=<code>&type=C`
-(`listing::modal_url`). Layout is verified only for Barang Gunaan,
-Farmaseutikal, Kosmetik & Dandanan Diri, Peranti Perubatan, and Produk
-Makanan/Minuman — the categories in `config::targets()`; other
-layouts may need separate handling (F4).
+**Modal detail** — `/directory/slm_viewdetail.php?comp_code=<code>&type=C`,
+built inside the seam by `Portal::fetch_modal`. Layout is verified only for
+Barang Gunaan, Farmaseutikal, Kosmetik & Dandanan Diri, Peranti Perubatan, and
+Produk Makanan/Minuman — the categories in `config::targets()`; other layouts
+may need separate handling (F4).
 
 **Verified vs. assumed** — the POST search and page-param pagination are
 verified live. The modal layout is verified for the categories above only.
@@ -125,9 +125,11 @@ against the live portal (F5).
 
 ## 5. Module contracts & seams
 
-**`Portal`** — the only place that knows the base URL, session, headers, and
-retry policy. Constructed with `Portal::new(base_url)`; tests substitute an
-httpmock server's base URL. Cheap to clone; copies are passed into tasks.
+**`Portal`** — the only place that knows the base URL, session, headers, URL
+shapes, and retry policy. Its interface is `init_session`, `search`, and
+`fetch_modal`; the raw `get` is private. Constructed with `Portal::new(base_url)`;
+tests substitute an httpmock server's base URL. Cheap to clone; copies are
+passed into tasks.
 
 **`listing`** — a deep module: callers hand over a `CrawlTarget` and get
 records; they never learn about `Total Record` lines or the page parameter.
@@ -178,17 +180,13 @@ one-time migration for pre-split databases only.
 
 ## 7. Concurrency & reliability
 
-- Concurrency is gated by two semaphores. The Portal owns one
-  (`MAX_CONCURRENT = 5`, `portal.rs:51`) that every request acquires; modal
-  fetches add a second, local one (`fetch_company_modals`, `listing.rs:91`), so
-  a modal GET is gated twice. The local one is redundant today — every modal
-  fetch goes through `Portal::get`, which already acquires the Portal's
-  semaphore.
-- `search` retries transport errors 3× with exponential backoff; the portal
-  drops connections under concurrent load, so those retries are load-bearing.
-  Modal fetches use plain `get`, which does **not** retry (`get_retry` exists
-  but has no call sites) — a dropped modal connection currently loses that
-  company's enrichment for the run.
+- Concurrency is gated by one semaphore, owned by the Portal
+  (`MAX_CONCURRENT = 5`, `portal.rs`) and acquired by every request. Modal
+  fetches need no local cap.
+- Every request shares one retry policy (`Portal::retrying`): retry transport
+  failures and server errors 3× with exponential backoff, then surface the last
+  error. The portal drops connections under concurrent load, so retries are
+  load-bearing.
 - Per-letter and per-modal failures are isolated: logged via
   `types::error_chain` (reqwest hides its real cause behind `Display`) and
   skipped. A single bad letter never aborts a category.
@@ -230,6 +228,8 @@ one-time migration for pre-split databases only.
 | D6 | Skip products whose holder doesn't resolve | `company_id` is `NOT NULL`; fabricating a company would corrupt the directory. | Auto-create a placeholder company per unresolved holder. |
 | D7 | One task per letter + a shared semaphore | Letters are independent; a failing letter must not abort the category, and concurrency must be bounded. | Sequential crawl; unbounded concurrency. |
 | D8 | Debug builds cap pages/letter | A local `cargo run` must not crawl thousands of live pages. | Always full crawl; require `--release` to smoke-test. |
+| D9 | One retry policy for every Portal request | `search` and `fetch_modal` share `Portal::retrying`; a dropped modal connection must not silently lose a company's enrichment. | Retry only `search`; a separate unused `get_retry`. |
+| D10 | The Portal seam owns URL shapes and the ignored `hdnCounter` | Callers pass a `comp_code`, not a URL; `search` sends `hdnCounter="0"` internally. Keeps protocol decisions inside the seam. | `listing` building modal URLs from `Portal::base()`; a caller-visible `counter` parameter. |
 
 ## 11. Forward roadmap
 

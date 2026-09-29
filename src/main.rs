@@ -60,9 +60,7 @@ async fn main() -> Result<(), Error> {
 
                 // Fetch each company's modal detail page (concurrently,
                 // capped) for phone/fax/email/etc. and its product list.
-                match listing::fetch_company_modals(&portal, &records, constants::MAX_CONCURRENT)
-                    .await
-                {
+                match listing::fetch_company_modals(&portal, &records).await {
                     Ok(entries) => {
                         let mut companies = Vec::with_capacity(entries.len());
                         let mut all_products = Vec::new();

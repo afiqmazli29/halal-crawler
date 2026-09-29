@@ -523,6 +523,22 @@ async fn test_fetch_subcategory_no_records_returns_empty() {
 // ── Modal detail fetching (httpmock, no database) ────────────────
 
 #[tokio::test]
+async fn test_fetch_modal_retries_server_errors() {
+    let ctx = common::setup_mock().await;
+
+    // The modal endpoint fails every time: the seam must retry 3× and then
+    // surface the error rather than silently returning the 500 body.
+    let mock = ctx.server.mock(|when, then| {
+        when.method(GET).path("/directory/slm_viewdetail.php");
+        then.status(500).body("boom");
+    });
+
+    let result = ctx.portal.fetch_modal("COMP-1").await;
+    assert!(result.is_err(), "exhausted retries should error");
+    mock.assert_hits(3);
+}
+
+#[tokio::test]
 async fn test_fetch_company_modals_enriches_and_returns_products() {
     let ctx = common::setup_mock().await;
 
@@ -556,7 +572,7 @@ async fn test_fetch_company_modals_enriches_and_returns_products() {
         "comp_code": "COMP-20230804-000001",
     }))];
 
-    let entries = listing::fetch_company_modals(&ctx.portal, &companies, 2)
+    let entries = listing::fetch_company_modals(&ctx.portal, &companies)
         .await
         .expect("modals");
 
@@ -583,7 +599,7 @@ async fn test_fetch_company_modals_skips_companies_without_comp_code() {
         "nama_syarikat": "tM_NoModal Co",
     }))];
 
-    let entries = listing::fetch_company_modals(&ctx.portal, &companies, 2)
+    let entries = listing::fetch_company_modals(&ctx.portal, &companies)
         .await
         .expect("modals");
 

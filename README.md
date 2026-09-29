@@ -132,7 +132,7 @@ thousands of pages. `HALAL_MAX_PAGES=N` overrides the cap for any build;
 | File | Purpose |
 |------|---------|
 | `main.rs` | Entrypoint. Seeds the portal session, crawls companies then subcategory listings, inserts, prints sample rows. |
-| `portal.rs` | The Portal seam: base URL, PHP session, semaphore, POST search (retries 3×), GET. Tests substitute an httpmock server via `Portal::new(base_url)`. |
+| `portal.rs` | The Portal seam: base URL, PHP session, semaphore, one shared retry policy, POST `search`, and `fetch_modal`. Tests substitute an httpmock server via `Portal::new(base_url)`. |
 | `listing.rs` | The listing fetcher: `fetch_companies` (name dedup), `fetch_subcategory` (key dedup), and `fetch_company_modals` — all sharing `crawl`/`letter_crawl` (page-param pagination). |
 | `parser.rs` | HTML extractors: `parse_table` (company spans + `comp_code`), `parse_product_table` (product rows), `parse_modal` (detail page), `extract_total_pages`, `extract_postcode`, `extract_state`. |
 | `records.rs` | Typed `Company`/`Product`. `from_value`/`pick_str` are test-only helpers; production parsing builds the structs directly in `parser.rs`. |

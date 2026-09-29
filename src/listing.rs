@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::sync::Arc;
 use tokio::task::JoinSet;
 
 use crate::parser;
@@ -64,32 +63,18 @@ pub async fn fetch_subcategory(
     Ok(deduped)
 }
 
-/// Fetch the modal detail page for a single company by comp_code.
-/// Returns the URL that would be used (for mock matching in tests).
-pub fn modal_url(base: &str, comp_code: &str) -> String {
-    format!(
-        "{}/directory/slm_viewdetail.php?comp_code={}&type=C",
-        base.trim_end_matches('/'),
-        comp_code
-    )
-}
-
 /// Fetch and parse modal detail pages for a batch of companies concurrently.
 /// Each company's `comp_code` is used to fetch its modal page, which returns
 /// enriched company data (phone, fax, email, website, etc.) and products.
 /// Products are returned as parsed; their category/subcategory membership is
 /// attached later, at insert time, via the `product_categories` table.
 ///
-/// Companies without a comp_code are skipped (left unchanged).
-///
-/// `max_concurrent` caps the number of simultaneous modal fetches.
+/// Companies without a comp_code are skipped (left unchanged). Concurrency is
+/// bounded by the Portal's own semaphore, so callers need not cap it.
 pub async fn fetch_company_modals(
     portal: &Portal,
     companies: &[Company],
-    max_concurrent: usize,
 ) -> Result<Vec<(Company, Vec<Product>)>, Error> {
-    let sem = semaphore(max_concurrent);
-
     let mut set = JoinSet::new();
 
     for company in companies {
@@ -101,13 +86,11 @@ pub async fn fetch_company_modals(
         }
 
         let portal = Portal::clone(portal);
-        let url = modal_url(portal.base(), &company.comp_code);
-        let _sem = sem.clone();
+        let comp_code = company.comp_code.clone();
         let company = company.clone();
 
         set.spawn(async move {
-            let _permit = _sem.acquire().await?;
-            let html = portal.get(&url).await?;
+            let html = portal.fetch_modal(&comp_code).await?;
             let (mut modal_company, products) = parser::parse_modal(&html);
 
             // Merge: keep the comp_code we already have, fill in modal fields
@@ -140,11 +123,6 @@ pub async fn fetch_company_modals(
     }
 
     Ok(all)
-}
-
-/// A simple semaphore type alias to keep things readable.
-fn semaphore(n: usize) -> Arc<tokio::sync::Semaphore> {
-    Arc::new(tokio::sync::Semaphore::new(n))
 }
 
 /// The shared crawl: one task per letter, each letter paginating from
@@ -205,7 +183,7 @@ async fn letter_crawl<T>(
 where
     T: Send + 'static,
 {
-    let html = portal.search(&category, ty, letter, 1, "0").await?;
+    let html = portal.search(&category, ty, letter, 1).await?;
     let total_pages = parser::extract_total_pages(&html);
     // A page cap (set in debug runs, or via env) stops a letter from crawling
     // the portal's thousands of pages.
@@ -231,7 +209,7 @@ where
             let portal = Portal::clone(&portal);
             let category = category.clone();
             set.spawn(async move {
-                let html = portal.search(&category, ty, letter, page, "0").await?;
+                let html = portal.search(&category, ty, letter, page).await?;
                 let r = parse(&html);
                 let n = r.len();
                 println!("│    [{letter}] page {page}/{fetch_up_to} ✓  {n} records");
