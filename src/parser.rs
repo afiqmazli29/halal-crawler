@@ -207,22 +207,6 @@ pub fn parse_product_table(html: &str) -> Vec<Product> {
     records
 }
 
-/// Extract the total-page count from a "Total Record … From N" line.
-pub fn extract_total_pages(md: &str) -> u32 {
-    md.lines()
-        .find_map(|line| {
-            if line.contains("Total Record") {
-                line.split("From")
-                    .nth(1)
-                    .map(|s| s.chars().filter(|c| c.is_ascii_digit()).collect::<String>())
-            } else {
-                None
-            }
-        })
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1)
-}
-
 /// Extract exactly 5-digit postcode from address, or empty string.
 fn extract_postcode(addr: &str) -> String {
     for part in addr.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {

@@ -1,35 +1,4 @@
-use halal_crawler::parser::{extract_total_pages, parse_modal, parse_product_table, parse_table};
-
-// ── extract_total_pages ────────────────────────────────────────
-
-#[test]
-fn test_extract_total_pages_standard_format() {
-    let md = "Total Record : 12345 From 15";
-    assert_eq!(extract_total_pages(md), 15);
-}
-
-#[test]
-fn test_extract_total_pages_portal_format() {
-    // Live portal format: "Total Record : 955 - Page 1 From 48"
-    let md = "Total Record : 955 - Page 1 From 48";
-    assert_eq!(extract_total_pages(md), 48);
-}
-
-#[test]
-fn test_extract_total_pages_multiline() {
-    let md = "Header\nTotal Record 100 From 1\nFooter";
-    assert_eq!(extract_total_pages(md), 1);
-}
-
-#[test]
-fn test_extract_total_pages_no_match() {
-    assert_eq!(extract_total_pages("no pages here"), 1);
-}
-
-#[test]
-fn test_extract_total_pages_empty() {
-    assert_eq!(extract_total_pages(""), 1);
-}
+use halal_crawler::parser::{parse_modal, parse_product_table, parse_table};
 
 // ── parse_table ────────────────────────────────────────────────
 

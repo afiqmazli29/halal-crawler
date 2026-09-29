@@ -180,13 +180,10 @@ where
     T: Send + 'static,
 {
     let html = portal.search(&category, ty, letter, 1).await?;
-    let total_pages = parser::extract_total_pages(&html);
+    let total_pages = total_pages(&html);
     // A page cap (set in debug runs, or via env) stops a letter from crawling
     // the portal's thousands of pages.
-    let fetch_up_to = match max_pages {
-        Some(m) if m < total_pages => m,
-        _ => total_pages,
-    };
+    let fetch_up_to = pages_to_fetch(total_pages, max_pages);
     let capped = fetch_up_to < total_pages;
     let page1_count = parse(&html).len();
     println!(
@@ -222,4 +219,72 @@ where
     }
 
     Ok((letter, records))
+}
+
+/// The total-page count announced on page 1 in a "Total Record … From N"
+/// line. Defaults to 1 when the line is absent or unparseable.
+fn total_pages(html: &str) -> u32 {
+    html.lines()
+        .find_map(|line| {
+            if line.contains("Total Record") {
+                line.split("From")
+                    .nth(1)
+                    .map(|s| s.chars().filter(|c| c.is_ascii_digit()).collect::<String>())
+            } else {
+                None
+            }
+        })
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1)
+}
+
+/// How far to paginate a letter: the announced total, capped when a cap is set.
+fn pages_to_fetch(total_pages: u32, max_pages: Option<u32>) -> u32 {
+    match max_pages {
+        Some(m) if m < total_pages => m,
+        _ => total_pages,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{pages_to_fetch, total_pages};
+
+    #[test]
+    fn total_pages_standard_format() {
+        assert_eq!(total_pages("Total Record : 12345 From 15"), 15);
+    }
+
+    #[test]
+    fn total_pages_portal_format() {
+        // Live portal format: "Total Record : 955 - Page 1 From 48"
+        assert_eq!(total_pages("Total Record : 955 - Page 1 From 48"), 48);
+    }
+
+    #[test]
+    fn total_pages_multiline() {
+        assert_eq!(total_pages("Header\nTotal Record 100 From 1\nFooter"), 1);
+    }
+
+    #[test]
+    fn total_pages_no_match_defaults_to_one() {
+        assert_eq!(total_pages("no pages here"), 1);
+        assert_eq!(total_pages(""), 1);
+    }
+
+    #[test]
+    fn pages_to_fetch_uncapped_uses_total() {
+        assert_eq!(pages_to_fetch(48, None), 48);
+    }
+
+    #[test]
+    fn pages_to_fetch_caps_when_below_total() {
+        assert_eq!(pages_to_fetch(48, Some(1)), 1);
+        assert_eq!(pages_to_fetch(48, Some(10)), 10);
+    }
+
+    #[test]
+    fn pages_to_fetch_ignores_cap_above_total() {
+        assert_eq!(pages_to_fetch(3, Some(10)), 3);
+    }
 }

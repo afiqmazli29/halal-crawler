@@ -134,7 +134,7 @@ thousands of pages. `HALAL_MAX_PAGES=N` overrides the cap for any build;
 | `main.rs` | Entrypoint. Seeds the portal session, crawls companies then subcategory listings, inserts, prints sample rows. |
 | `portal.rs` | The Portal seam: base URL, PHP session, semaphore, one shared retry policy, POST `search`, and `fetch_modal`. Tests substitute an httpmock server via `Portal::new(base_url)`. |
 | `listing.rs` | The listing fetcher: `fetch_companies` (name dedup), `fetch_subcategory` (key dedup), and `fetch_company_modals` — all sharing `crawl`/`letter_crawl` (page-param pagination). |
-| `parser.rs` | HTML extractors: `parse_table` (company spans + `comp_code`), `parse_product_table` (product rows), `parse_modal` (detail page), `extract_total_pages`, `extract_postcode`, `extract_state`. |
+| `parser.rs` | HTML record extractors: `parse_table` (company spans + `comp_code`), `parse_product_table` (product rows), `parse_modal` (detail page), `extract_postcode`, `extract_state`. |
 | `records.rs` | Typed `Company`/`Product`. `Product` carries its own (category, subcategory) membership. `from_value`/`pick_str` are test-only helpers; production parsing builds the structs directly in `parser.rs`. |
 | `db.rs` | PostgreSQL schema init + upsert inserts + `sample_companies`. |
 | `config.rs` | The crawl target list (`targets()`) and progress labels (`label()`). |

@@ -311,6 +311,54 @@ async fn test_scrape_companies_dedups_across_letters() {
 }
 
 #[tokio::test]
+async fn test_scrape_companies_caps_pages_per_letter() {
+    let ctx = common::setup_mock().await;
+
+    // Page 1 announces 5 total pages, but the cap is 1: only page 1 is
+    // fetched, and page 2 is never requested.
+    let page1 = ctx.server.mock(|when, then| {
+        when.method(POST)
+            .path("/index.php")
+            .query_param("cari", "a")
+            .query_param("page", "1");
+        then.status(200)
+            .header("content-type", "text/html")
+            .body(common::listing_html(
+                &[("tCap_Alpha", "1 Jalan, 50000 KL, Kuala Lumpur")],
+                5,
+            ));
+    });
+    let page2 = ctx.server.mock(|when, then| {
+        when.method(POST)
+            .path("/index.php")
+            .query_param("cari", "a")
+            .query_param("page", "2");
+        then.status(200)
+            .header("content-type", "text/html")
+            .body(common::listing_html(
+                &[("tCap_Beta", "2 Jalan, 50000 KL, Kuala Lumpur")],
+                5,
+            ));
+    });
+    ctx.server.mock(|when, then| {
+        when.method(POST).path("/index.php");
+        then.status(200)
+            .header("content-type", "text/html")
+            .body("<html><body>empty</body></html>");
+    });
+
+    let records = listing::fetch_companies(&ctx.portal, &company_target(), Some(1))
+        .await
+        .expect("scrape");
+
+    let names: Vec<&str> = records.iter().map(|r| r.name.as_str()).collect();
+    assert!(names.contains(&"tCap_Alpha"), "got: {names:?}");
+    assert!(!names.contains(&"tCap_Beta"), "page 2 should be capped");
+    page1.assert_hits(1);
+    page2.assert_hits(0);
+}
+
+#[tokio::test]
 async fn test_scrape_companies_paginates_via_page_param() {
     let ctx = common::setup_mock().await;
 
