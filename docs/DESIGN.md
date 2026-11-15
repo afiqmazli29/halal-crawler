@@ -261,15 +261,21 @@ memberships, so it reflects product categories only.
 - Every request shares one retry policy (`Portal::retrying`): retry transport
   failures and server errors 3× with exponential backoff, then surface the last
   error. The portal drops connections under concurrent load, so retries are
-  load-bearing.
+  load-bearing. It currently treats other non-2xx responses (including 403,
+  404, and 429) as successful bodies; F9 covers making non-2xx explicit and
+  retrying 408/429.
 - Per-letter and per-modal failures are isolated: logged via
   `types::error_chain` (reqwest hides its real cause behind `Display`) and
-  skipped. A single bad letter never aborts a category.
+  skipped. A single bad letter never aborts a category. A failed target lands
+  in `RunReport.failures`, but `main` still exits 0; F9 covers a non-zero exit.
+- The semaphore bounds in-flight requests, not task count. `letter_crawl`
+  spawns one task per page and `fetch_company_modals` one per company; F1
+  covers bounding task spawning and batching writes.
 - Debug builds cap each letter at one page so a local `cargo run` doesn't chew
   through the portal's thousands of pages.
 - The API is a separate process with its own pool and no in-memory state shared
   with a crawl. It sees committed rows only, so a reader may observe a target
-  midway through its per-company transactions.
+  midway through its insert batches.
 
 ## 8. Configuration
 
@@ -303,9 +309,13 @@ memberships, so it reflects product categories only.
   a live PostgreSQL; point elsewhere via `TEST_DATABASE_URL`.
 - **Non-DB suites** (fast) — `parser_tests`, `records_tests`, `config_tests`,
   `constants_tests`, plus `listing`'s in-module unit tests for the pagination
-  grammar and cap policy.
+  grammar and cap policy and `api::params`'s pagination unit tests.
 - **Compile check** — `cargo check`; the pre-commit hook runs
   `cargo fmt -- --check` + `cargo check`.
+- **CI (planned)** — there is no workflow yet. Add a PostgreSQL service job
+  running `cargo fmt --check`, `cargo clippy`, `cargo test`, and the OpenAPI
+  lint; this would have caught the parallel API test collision. Clear the
+  existing clippy warnings before making clippy blocking.
 
 ## 10. Decision log
 
@@ -353,19 +363,22 @@ enormous.
   a daily-incremental strategy keyed off expiry dates.
 - **Interaction:** `HALAL_MAX_PAGES` already caps per letter for smoke runs;
   don't conflate that with production completion.
+- **Also:** bound page/modal task spawning (the semaphore caps requests, not
+  tasks) and batch product writes — preload a holder → company map and use
+  multi-row upserts instead of one lookup and category insert per row.
 
 ### F2 — Scheduling
 
-Run the company job weekly; run the product job incrementally or less often.
-Upserts already make re-runs safe.
+The chosen production shape is one weekly `all` job (companies, then products).
+Upserts make re-runs safe. If the product job exceeds a week, checkpoint it (F1)
+or split companies weekly and products on a longer cadence.
 
-- **Recommended:** systemd timers per job — native logging via journald, no
-  container runtime to maintain, easy to reason about. Run
-  `halal-crawler companies` before `halal-crawler products`.
-- **Alternatives:** host crontab (simplest, weaker logging); podman container
-  (portable, more moving parts).
-- **Requirement:** persist output somewhere durable (`>> /var/log/halal-crawler.log 2>&1`)
-  since per-letter progress prints to stdout.
+- **Recommended:** one systemd timer running `halal-crawler all` in a container,
+  with `flock`, `Persistent=true`, `TimeoutStartSec=infinity`, and journald.
+- **Alternatives:** host crontab (weaker logging); separate per-job timers if
+  the product cadence diverges.
+- **Requirement:** journald or a durable log file, since per-letter progress
+  prints to stdout.
 
 ### F3 — `company_id` resolution robustness
 
@@ -386,7 +399,8 @@ Company-detail modal parsing is verified for a subset of categories.
 
 - **Recommended:** detect an unrecognized modal layout and log it with the
   category/comp_code rather than silently returning empty fields, then add
-  per-category handling as evidence arrives.
+  per-category handling as evidence arrives. Also dedup modal fetches across
+  company targets: a company in `BG` and `PR` is currently fetched twice.
 - **Alternatives:** one generic parser for all layouts (fragile).
 
 ### F5 — Live verification
@@ -403,6 +417,10 @@ Company-detail modal parsing is verified for a subset of categories.
   (already wired; verify against real data).
 - Refine state matching if real data shows misses (e.g. "W.P. Kuala Lumpur",
   "K.L.") — `STATES` + `extract_state`.
+- Fix the address heuristics: `extract_state` checks the full address before
+  the last comma parts (contradicting its comment), and `extract_postcode`
+  takes the first five-digit part, so a street name or house number can win.
+  Prefer the final components and add regression fixtures.
 
 ### F7 — API hardening
 
@@ -427,6 +445,38 @@ product re-run.
   semantics get awkward); re-crawl the whole product job after a company
   refresh (correct but expensive at product-job scale).
 
+### F9 — Crawl-job reliability
+
+Failures are logged but not always visible, and some error responses look like
+empty data.
+
+- **Exit status:** return non-zero when `RunReport.failures` is non-empty, so a
+  scheduled job cannot look successful after a failed target.
+- **HTTP status:** treat non-2xx responses as errors; retry 408/429/5xx and
+  surface other 4xx instead of parsing the body as a listing.
+- **Counts:** company reporting sums the listing insert and the enrichment
+  upsert, counting one company as both inserted and updated. Track unique names
+  or count only the final pass.
+- **Observability:** persist per-target failure counts (and capped-letter
+  counts) instead of relying on stderr alone.
+- **CI:** add a PostgreSQL service job for `fmt`, `clippy`, tests, and the
+  OpenAPI lint.
+- **Housekeeping:** `.env.example` sets `HALAL_MAX_PAGES=1`; comment it out or
+  label it as a smoke-test override. `migrations/0001` has a duplicate `COMMIT`.
+
+### F10 — Production container deployment
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the full plan and acceptance criteria.
+
+- **P0:** F9's failure visibility, a `migrate` command with separate crawler/API
+  database roles, multi-stage `api`/`crawler` images, production compose/systemd
+  with a Postgres volume, TLS, and backups.
+- **Blocking risk:** a weekly `all` run may exceed seven days until the product
+  job is checkpointed (F1). If it does, checkpoint or split the cadence before
+  relying on weekly completion.
+- **Open decisions:** managed vs container Postgres; rootless vs rootful
+  Podman; existing proxy vs bundled Caddy.
+
 ## 12. Open questions & risks
 
 - **Holder → company ambiguity.** Two companies can share a name across
@@ -438,13 +488,24 @@ product re-run.
   `companies` job skips unresolved holders; F8's staging table is the path to
   full independence.
 - **State extraction.** Substring matching over `STATES` can mis-hit; the
-  fallback ordering needs real-data validation.
+  current order checks the full address before the last comma parts, and
+  `extract_postcode` takes the first five-digit part. F6 covers both.
 - **Portal stability.** Connection drops under concurrency are expected; if
   they worsen, lower `MAX_CONCURRENT`.
+- **HTTP error pages look like empty data.** `Portal::retrying` returns
+  non-5xx error bodies, so a 403/404/429 page parses as zero records. F9 covers
+  status handling.
 - **Silent partial crawls.** A capped or failed letter logs but does not abort
-  the run; `RunReport.failures` records failed targets, but a capped letter is
-  still only visible in stdout. F1's checkpointing should make incompleteness
-  explicit in the report.
+  the run; `RunReport.failures` records failed targets, but `main` exits 0 and a
+  capped letter is only visible in stdout. F9 covers the exit status and
+  persisted failure counts; F1's checkpointing makes incompleteness visible in
+  the report.
+- **Company counts overstate.** The listing insert and the enrichment upsert
+  both contribute to the company counts, so one company can be counted twice.
+  F9 covers unique-name accounting.
+- **Task explosion.** The semaphore caps in-flight requests, not task count;
+  page- and company-level `JoinSet`s can hold thousands of waiting tasks. F1
+  covers bounding them.
 - **Company modal layout drift.** The portal can change markup per category
   without notice; F4's detection is the mitigation.
 - **API is unauthenticated.** It exposes only already-public directory data,
@@ -455,3 +516,21 @@ product re-run.
   grows.
 - **API needs the crawler's schema.** `db::connect` does not create tables; the
   binary fails fast with an actionable message, but deployment order matters.
+
+## 13. Production deployment
+
+Status: planned. The full plan, file layout, and acceptance criteria live in
+[`DEPLOYMENT.md`](DEPLOYMENT.md).
+
+The target is a single Linux host running two images — `halal-api` (long-lived)
+and `halal-crawler` (one-shot) — with PostgreSQL on a persistent volume, a TLS
+reverse proxy in front of the API, and a weekly systemd timer running the
+crawler container. A one-shot `migrate` job creates/updates the schema; the
+crawler and API use separate database roles.
+
+Production is blocked on the F9 failure-visibility fixes, a `migrate` command,
+checkpointing (or a longer cadence) for the product job, and the container work
+in DEPLOYMENT.md. Open decisions are managed vs containerized PostgreSQL,
+rootless vs rootful Podman, and existing vs bundled TLS proxy. The weekly job
+runs `all`; if it exceeds a week, the fallback is checkpointing (F1) or a split
+cadence.
