@@ -2,10 +2,12 @@
 
 ## Crawler
 
-- [ ] Verify live crawl end-to-end after the retry fix (`cargo run`) — watch for `│ ✗` per-letter lines and the final counts
-- [ ] Products crawl (phase 2): `fetch_subcategory` is written but never run against the live portal — verify the ty=PR POST flow, page-param pagination, and brand/holder/expiry extraction, and fix whatever breaks
-- [ ] Phase 2 scale: PR alone announces ~7,350 pages for letter "b" — consider a page cap or a daily-incremental strategy before running phase 2 in full
+- [ ] Verify the company job end-to-end (`halal-crawler companies`) after the retry fix
+- [ ] Product job: `fetch_subcategory` is written but never run against the live portal — verify the ty=PR POST flow, page-param pagination, and brand/holder/expiry extraction. It is now the only product source, so this must be verified before relying on `products`
+- [ ] Product job scale: PR alone announces ~7,350 pages for letter "b" — add checkpointing or a daily-incremental strategy before running it in full
 - [ ] If the portal keeps dropping connections, lower `MAX_CONCURRENT` in `src/constants.rs` (currently 5)
+- [ ] Clean up legacy phase-1 product rows and `CO` memberships in existing databases; `/categories` hides `CO`, but `/products` still reads those rows until they are removed
+- [ ] If the product job must run independently of the company job, add an `unlinked_products` staging table and reconciliation (F8)
 
 ## Scheduling
 

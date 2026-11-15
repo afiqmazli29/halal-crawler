@@ -16,7 +16,8 @@ refresh changed rows and add new ones without duplicates.
 **In scope**
 
 - Reading the public directory (no authentication).
-- Two crawl phases: companies (with modal enrichment) and subcategory listings.
+- Two crawl jobs: companies (company listings + modal enrichment) and
+  products (subcategory listings).
 - Upserting records into PostgreSQL with `scrap_log` run tracking.
 - A read-only HTTP API over the crawled data: companies, products,
   categories, and run status.
@@ -34,22 +35,26 @@ The crate is a lib plus two binaries: `src/lib.rs` exposes the
 `src/bin/halal-api.rs` is the read-only HTTP API. Tests import
 `halal_crawler::...`.
 
-`main.rs` is thin: it seeds the session and calls
-`crawl::run(&portal, &pool, &config::targets(), max_pages)`, then prints the
-summary from the returned `RunReport`. `crawl::run` runs two phases:
+`main.rs` is thin: it picks a job from the first argument (`companies`,
+`products`, or `all`), seeds the session, calls
+`crawl::run(&portal, &pool, &targets, max_pages)`, then prints the summary from
+the returned `RunReport`. `crawl::run` runs whichever phases are present in the
+target list it is given:
 
 1. **Companies** — for each company target, a letter search (`a`–`z`)
    discovers each row's `comp_code` from its `onclick` modal link. Listing
    records are upserted first, then each company's modal detail page is fetched
    concurrently to enrich fields (phone, fax, e-mail, website, reference no.,
-   officer) and scrape its product list. Enriched companies and their products
-   are upserted.
-2. **Subcategory listings** — products/premises per target, upserted with the
-   category mapping carried on each record.
+   officer). Enriched companies are upserted. Products are **not** read from
+   modals.
+2. **Products** — products/premises per subcategory target, upserted with the
+   category mapping carried on each record. This is the only writer of
+   `products` and `product_categories`.
 
-Each target's `scrap_log` row is opened and closed inside `crawl::run`. A
-failing target is recorded in `RunReport.failures` and skipped, never aborting
-the run.
+`all` runs companies first, then products, so product holders resolve against
+the company rows. Each target's `scrap_log` row is opened and closed inside
+`crawl::run`. A failing target is recorded in `RunReport.failures` and skipped,
+never aborting the run.
 
 ```
                  ┌────────────┐
@@ -57,7 +62,7 @@ the run.
                  └─────┬──────┘
           search (POST)│  fetch_modal (GET)
                  ┌─────▼──────┐
-                 │   crawl    │  phases + insert ordering + scrap_log
+                 │   crawl    │  jobs + insert ordering + scrap_log
                  └─────┬──────┘
                  ┌─────▼──────┐
                  │  listing   │  pagination + concurrency + dedup
@@ -82,13 +87,13 @@ never writes.
 
 | Module | Responsibility |
 |--------|----------------|
-| `crawl.rs` | The run orchestration: `run(portal, pool, targets, max_pages) -> RunReport` owns both phases, the insert ordering, and each target's `scrap_log` lifecycle. |
+| `crawl.rs` | The run orchestration: `run(portal, pool, targets, max_pages) -> RunReport` owns the job order, the insert ordering, and each target's `scrap_log` lifecycle. |
 | `portal.rs` | The Portal seam: base URL, PHP session, browser-shaped client, semaphore, POST `search`, `fetch_modal`, and the one shared retry policy. |
-| `listing.rs` | `fetch_companies` (name-dedup), `fetch_subcategory` (key-dedup), `fetch_company_modals`, and the shared `crawl`/`letter_crawl`. Hides pagination and concurrency. |
-| `parser.rs` | All HTML record extraction: `parse_table`, `parse_product_table`, `parse_modal`, `extract_postcode`, `extract_state`. |
+| `listing.rs` | `fetch_companies` (name-dedup), `fetch_subcategory` (key-dedup), `fetch_company_modals` (company enrichment), and the shared `crawl`/`letter_crawl`. Hides pagination and concurrency. |
+| `parser.rs` | All HTML record extraction: `parse_table`, `parse_product_table`, `parse_modal` (company fields only), `extract_postcode`, `extract_state`. |
 | `records.rs` | `Company` / `Product` types. `Product` carries its own (category, subcategory) membership; `Company::fill_from` owns enrichment precedence. |
 | `db.rs` | Schema init, upsert inserts, private `resolve_company`, `start_scrap`/`finish_scrap`, `sample_companies`. |
-| `config.rs` | `targets()` — the single list of (category, ty, phase) crawl targets — plus `label()`/`category_name()`/`subcategory_name()` for progress output and API labels. |
+| `config.rs` | `company_targets()`, `product_targets()`, and `targets()` — the crawl jobs — plus `label()`/`category_name()`/`subcategory_name()` for progress output and API labels. |
 | `constants.rs` | `MAX_CONCURRENT`, `DEBUG_MAX_PAGES_PER_LETTER`, `DATA_PARAM`, `STATES`, `max_pages_per_letter`. |
 | `types.rs` | `Error` alias, `error_chain`, `CrawlTarget`, `Phase`. |
 | `api/` | The read-only HTTP surface: `router`, DTOs, pagination params, error mapping, and one handler module per resource. |
@@ -147,13 +152,13 @@ may need separate handling (F4).
 
 **Verified vs. assumed** — the POST search and page-param pagination are
 verified live. The modal layout is verified for the categories above only.
-Phase 2 (`fetch_subcategory`) is written but has not been run end-to-end
+The products job (`fetch_subcategory`) is written but has not been run end-to-end
 against the live portal (F5).
 
 ## 5. Module contracts & seams
 
 **`crawl`** — the run orchestration. `run` takes the portal, pool, targets, and
-cap, and returns a `RunReport` (counts + `failures`). It owns the phase order,
+cap, and returns a `RunReport` (counts + `failures`). It owns the job order,
 the listing-before-enrichment insert ordering, and each target's `scrap_log`
 open/close. A failed target is recorded and skipped.
 
@@ -171,14 +176,16 @@ concurrently. A failing letter is logged and skipped, never aborting the
 category. `fetch_company_modals` fetches modal
 pages concurrently and merges them onto the listing record via
 `Company::fill_from`: the listing name is the identity and is never rewritten,
-while the modal's non-empty fields win and the listing fills the gaps. Both
-`fetch_subcategory` and `fetch_company_modals` stamp each `Product` with the
+while the modal's non-empty fields win and the listing fills the gaps. It
+returns companies only; products are never read from modals. `fetch_subcategory`
+is the only function that returns `Product` records, and it stamps each with the
 target's membership before returning it.
 
 **`parser`** — all HTML parsing lives here. `element_text` joins
 `<br>`-separated lines with `", "` and collapses whitespace, working around
 `scraper`'s delimiter-free `text()`; adjacent text nodes are concatenated
-exactly as emitted so names split across runs keep their spacing.
+exactly as emitted so names split across runs keep their spacing. `parse_modal`
+extracts company fields only; `parse_product_table` is the product extractor.
 
 **`db`** — owns schema init and every upsert. `resolve_company` matches a
 product holder to a company by exact name, then case-insensitive name,
@@ -227,6 +234,9 @@ one-time migration for pre-split databases only.
   would re-introduce duplicates across categories.
 - **`company_id` is mandatory.** A product whose holder doesn't resolve to a
   real company is skipped, never linked to a fabricated company (`db.rs:274`).
+- **Products have one source.** Only the products job writes `products` and
+  `product_categories`; company modals enrich `companies` only. This prevents
+  empty-brand duplicates and company-modal `CO` pseudo-memberships.
 - **Product identity is `(company_id, name, brand)`.** Category membership is
   tracked in `product_categories`, not on the product row. `listing`'s in-memory
   dedup key is `(name, brand, holder)` — the same identity with `holder` standing
@@ -240,6 +250,8 @@ queries rely on — `companies(state)`, `products(name)`,
 `scrap_log(started_at DESC)`; `companies(name)` is already indexed by the unique
 constraint and `products(company_id)` is covered by the leading column of
 `products(company_id, name, brand)`. The API uses `db::connect` and requires the schema to exist.
+`/categories` is seeded from product targets and excludes legacy `CO`
+memberships, so it reflects product categories only.
 
 ## 7. Concurrency & reliability
 
@@ -280,8 +292,9 @@ constraint and `products(company_id)` is covered by the leading column of
   `product_listing_html`, and the `company`/`product` record constructors;
   reuse them when adding crawl tests.
 - **Run orchestration** — `crawl::run` is tested end-to-end with an httpmock
-  portal and a live PostgreSQL: counts, enrichment, and the `scrap_log`
-  lifecycle are asserted through the one interface.
+  portal and a live PostgreSQL: counts, enrichment, the `scrap_log` lifecycle,
+  and the single-product-source rule (a modal product is not persisted; a
+  product-listing row is) are asserted through the one interface.
 - **API** — `tests/api_test.rs` drives `api::router(pool)` with
   `tower::ServiceExt::oneshot` against a live PostgreSQL: pagination and
   `meta`, filters, detail/404 shape, product memberships, category counts, and
@@ -313,27 +326,29 @@ constraint and `products(company_id)` is covered by the leading column of
 | D13 | `Company::fill_from` owns within-run enrichment precedence | One named, unit-testable operation; the modal's non-empty fields win, the listing fills gaps. The SQL `CASE` keeps the cross-run half. | Inline merge in `listing` (no unit seam); removing the SQL `CASE` (would wipe stored fields on a later listing pass). |
 | D14 | The listing name is the company identity; the modal never rewrites it | `companies` is unique on `name`; a differently-spelled modal name would otherwise create a duplicate row. | Modal name wins — silently splits one company into two. |
 | D15 | `listing` owns the pagination grammar and cap policy | `total_pages` and `pages_to_fetch` are private to the module that paginates; the parser is for record extraction only. | `extract_total_pages` public in `parser`, tested away from its only caller. |
-| D16 | `crawl::run` owns both phases and the `scrap_log` lifecycle | The binary becomes thin; the run's insert ordering and log open/close are testable through one interface, and failures surface in `RunReport`. | Orchestration in `main.rs` (no test seam); a closure-based `db::with_scrap_log`. |
+| D16 | `crawl::run` owns both jobs and the `scrap_log` lifecycle | The binary becomes thin; the run's insert ordering and log open/close are testable through one interface, and failures surface in `RunReport`. | Orchestration in `main.rs` (no test seam); a closure-based `db::with_scrap_log`. |
 | D17 | Records are built directly; no JSON adapter | Production parsing builds `Company`/`Product` in `parser.rs`; a `from_value`/`pick_str` adapter only ever served tests and its suite guarded no production path. Dropping it also drops the `serde_json` production dependency. | Keep a test-only adapter; promote it so the parser emits JSON. |
 | D18 | axum, in a second `halal-api` binary in the same crate | Tokio-native, tower middleware, and the lib keeps the test seam. The crawler stays a batch binary; the API deploys and restarts independently. | Subcommand on the crawler (couples deploy artifacts); a separate workspace crate (overhead for one API). |
 | D19 | The API uses `db::connect`, never `db::init` | The API is read-only and may run with a role that cannot create or alter tables. Schema ownership stays with the crawler; the binary fails fast if the tables are absent. | Calling `init` from the API (needs DDL privileges); a read-only flag inside `init`. |
 | D20 | `/api/v1`, `{data, meta}` lists, offset pagination | A version prefix is cheap; one envelope keeps clients uniform. `page`/`per_page` with a 100 cap is simple and predictable. Keyset pagination can be added later without changing the envelope. | Unversioned paths; a bare array for lists; keyset pagination up front (clients don't need it yet). |
 | D21 | Load product memberships in one batch per page | One `ANY($1)` query keeps a product page at three fixed round trips (count, page, memberships) instead of N+1 and avoids `json_agg`/`sqlx::Json`. | A join per product; `json_agg` in the list query. |
 | D22 | Substring search via `ILIKE`, no trigram index yet | The dataset is small enough for a scan, and `CREATE EXTENSION` often needs privileges the deploy role lacks. Revisit with `pg_trgm` GIN indexes when query latency shows it. | Requiring `pg_trgm` at init; full-text search (different matching semantics). |
+| D23 | Separate company and product jobs; only the products job writes products | Company modals enrich `companies` only. One product source removes empty-brand/`CO` duplicates, makes brand and category membership authoritative, and lets the jobs be scheduled independently. `all` keeps companies-first ordering for holder resolution. | Keeping modal products as a second source (duplicate/ambiguous rows); a staging table for unresolved holders (deferred until the product job must run fully independently). |
 
 ## 11. Forward roadmap
 
 Each item below is a job to be checked against this document. Decisions are
 proposed with alternatives noted; resolve the open ones before implementing.
 
-### F1 — Phase 2 scale
+### F1 — Product job scale
 
-PR alone announces ~7,350 pages for letter "b". A full phase-2 run is
+PR alone announces ~7,350 pages for letter "b". A full product job is
 enormous.
 
-- **Recommended:** make phase 2 incremental/checkpointed — record progress per
-  (category, subcategory, letter, page) so a run resumes rather than restarts,
-  and re-crawl only what's stale. `scrap_log` is the natural place to grow this.
+- **Recommended:** make the product job incremental/checkpointed — record
+  progress per (category, subcategory, letter, page) so a run resumes rather
+  than restarts, and re-crawl only what's stale. `scrap_log` is the natural
+  place to grow this.
 - **Alternatives:** a blunt global page cap (simple, but silently incomplete);
   a daily-incremental strategy keyed off expiry dates.
 - **Interaction:** `HALAL_MAX_PAGES` already caps per letter for smoke runs;
@@ -341,11 +356,12 @@ enormous.
 
 ### F2 — Scheduling
 
-Weekly run to refresh changed rows and add new ones; upserts already make
-re-runs safe.
+Run the company job weekly; run the product job incrementally or less often.
+Upserts already make re-runs safe.
 
-- **Recommended:** a systemd timer on the host — native logging via journald,
-  no container runtime to maintain, easy to reason about.
+- **Recommended:** systemd timers per job — native logging via journald, no
+  container runtime to maintain, easy to reason about. Run
+  `halal-crawler companies` before `halal-crawler products`.
 - **Alternatives:** host crontab (simplest, weaker logging); podman container
   (portable, more moving parts).
 - **Requirement:** persist output somewhere durable (`>> /var/log/halal-crawler.log 2>&1`)
@@ -354,7 +370,9 @@ re-runs safe.
 ### F3 — `company_id` resolution robustness
 
 `resolve_company` matches holder → company by exact/case-insensitive name.
-Real data will produce near-misses (punctuation, suffixes, whitespace).
+Real data will produce near-misses (punctuation, suffixes, whitespace). Because
+the product job is now the only product source, an unresolved holder is a
+completeness gap, not just a skipped row.
 
 - **Recommended:** normalize both sides (trim, collapse whitespace, case-fold,
   strip common suffixes) and keep the exact-match preference; log unresolved
@@ -362,9 +380,9 @@ Real data will produce near-misses (punctuation, suffixes, whitespace).
 - **Alternatives:** link via `comp_code` where the holder is itself a company;
   fuzzy matching (risk of false positives).
 
-### F4 — Modal coverage
+### F4 — Company modal coverage
 
-Modal parsing is verified for a subset of categories.
+Company-detail modal parsing is verified for a subset of categories.
 
 - **Recommended:** detect an unrecognized modal layout and log it with the
   category/comp_code rather than silently returning empty fields, then add
@@ -373,9 +391,10 @@ Modal parsing is verified for a subset of categories.
 
 ### F5 — Live verification
 
-- Verify the end-to-end company crawl after the retry fix (`cargo run`).
-- Verify phase 2: the `ty=PR` POST flow, page-param pagination, and
-  brand/holder/expiry extraction against the live portal.
+- Verify the company job end-to-end (`halal-crawler companies`).
+- Verify the product job: the `ty=PR` POST flow, page-param pagination, and
+  brand/holder/expiry extraction against the live portal. It is now the only
+  product source, so no products exist until this works.
 - Run `cargo test` against a live PostgreSQL.
 
 ### F6 — Data completeness
@@ -395,10 +414,29 @@ The first API cut is public, read-only, offset-paginated, and uses `ILIKE`.
 - Add caching headers/ETags once consumers exist.
 - Add OpenAPI generation if external clients need a formal contract.
 
+### F8 — Product job independence
+
+The product job resolves each `holder` against `companies`; unresolved holders
+are skipped. With a single product source, those rows are lost until a later
+product re-run.
+
+- **Recommended:** keep the companies-first contract for now. If the product
+  job must run fully independently, add an `unlinked_products` staging table
+  and reconcile it after company refreshes.
+- **Alternatives:** nullable `products.company_id` (unique-key and `NULL`
+  semantics get awkward); re-crawl the whole product job after a company
+  refresh (correct but expensive at product-job scale).
+
 ## 12. Open questions & risks
 
 - **Holder → company ambiguity.** Two companies can share a name across
   categories; `name`-unique collapses them, which may merge distinct entities.
+- **Products have one source.** The company job no longer masks product-crawl
+  failures. Until F5 verifies the product job, `products` stays empty; legacy
+  company-modal products and `CO` memberships remain until cleaned up.
+- **Product job depends on companies.** Running `products` without a recent
+  `companies` job skips unresolved holders; F8's staging table is the path to
+  full independence.
 - **State extraction.** Substring matching over `STATES` can mis-hit; the
   fallback ordering needs real-data validation.
 - **Portal stability.** Connection drops under concurrency are expected; if
@@ -407,8 +445,8 @@ The first API cut is public, read-only, offset-paginated, and uses `ILIKE`.
   the run; `RunReport.failures` records failed targets, but a capped letter is
   still only visible in stdout. F1's checkpointing should make incompleteness
   explicit in the report.
-- **Modal layout drift.** The portal can change markup per category without
-  notice; F4's detection is the mitigation.
+- **Company modal layout drift.** The portal can change markup per category
+  without notice; F4's detection is the mitigation.
 - **API is unauthenticated.** It exposes only already-public directory data,
   but anyone who can reach the port can enumerate it. Keep the bind on loopback
   unless a reverse proxy/allowlist is in front.

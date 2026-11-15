@@ -6,7 +6,11 @@ Scrapes the [Malaysia Halal Portal](https://www.halal.gov.my/) public directory 
 
 ```bash
 cp .env.example .env   # edit DATABASE_URL if needed
-cargo run
+cargo run              # both jobs: companies, then products
+
+# Or run one job:
+cargo run --bin halal-crawler -- companies
+cargo run --bin halal-crawler -- products
 ```
 
 Requires Rust 1.88+ (edition 2024) and a running PostgreSQL instance.
@@ -14,14 +18,16 @@ Requires Rust 1.88+ (edition 2024) and a running PostgreSQL instance.
 ## How it works
 
 1. Seed a PHP session on the portal.
-2. For each category, search each letter `a`–`z`: company listings (`ty=CO`) and subcategory listings (products, premises, …) both paginate on the `page` parameter, using the total-page count announced on page one.
-3. Each company row in the listing carries an `onclick="openModal('directory/slm_viewdetail.php?comp_code=…', …)"` link. The `comp_code` is extracted, and each company's modal detail page (`/directory/slm_viewdetail.php?comp_code=…&type=C`) is fetched concurrently to enrich the company record (phone, fax, e-mail, website, reference no., officer) and scrape its **Product / Menu List**.
-4. Insert the records into the `companies`, `products`, and `product_categories` tables, then print a few sample rows.
+2. The **companies** job sweeps each category's company listing (`ty=CO`) a–z. Each row carries an `onclick="openModal('directory/slm_viewdetail.php?comp_code=…', …)"` link; the `comp_code` is extracted and the company's modal detail page (`/directory/slm_viewdetail.php?comp_code=…&type=C`) is fetched concurrently to enrich phone, fax, e-mail, website, reference no., and officer. It writes only `companies`.
+3. The **products** job sweeps each product/premise subcategory listing a–z, writing `products` and their `(category, subcategory)` memberships. It is the only writer of products.
+4. `all` runs companies first, so product holders resolve to company rows, then products. Both jobs use the same page-parameter pagination, driven by the total-page count announced on page one.
 
-The modal parsing currently targets the detail-page layout used by Barang
-Gunaan, Farmaseutikal, Kosmetik & Dandanan Diri, Peranti Perubatan, and Produk
-Makanan/Minuman — the company targets in `config::targets()`. Other categories'
-modal layouts may differ and need separate handling.
+The company-detail modal parsing targets the layout used by Barang Gunaan,
+Farmaseutikal, Kosmetik & Dandanan Diri, Peranti Perubatan, and Produk
+Makanan/Minuman — the company targets in `config::company_targets()`. Other
+categories' modal layouts may differ and need separate handling. Modals enrich
+companies only; their Product / Menu List is ignored. `PL` has a company target
+but no product target, so it contributes companies only.
 
 ## HTTP API (read-only)
 
@@ -42,7 +48,7 @@ curl 'http://localhost:8080/api/v1/companies?per_page=2'
 | GET | `/api/v1/companies/{id}/products` | That company's products; paginated |
 | GET | `/api/v1/products` | List products; `q`, `company_id`, `category`, `subcategory`, `page`, `per_page` |
 | GET | `/api/v1/products/{id}` | Product detail with its category memberships |
-| GET | `/api/v1/categories` | Configured categories/subcategories with product counts |
+| GET | `/api/v1/categories` | Configured product categories/subcategories with counts |
 | GET | `/api/v1/scrape-runs` | Recent `scrap_log` rows, newest first; `limit` |
 
 Paginated lists (`/companies`, `/products`, `/companies/{id}/products`) return
@@ -187,14 +193,14 @@ thousands of pages. `HALAL_MAX_PAGES=N` overrides the cap for any build;
 
 | File | Purpose |
 |------|---------|
-| `main.rs` | Entrypoint. Seeds the portal session, calls `crawl::run`, prints the summary from the returned report. |
-| `crawl.rs` | The run orchestration: both phases, insert ordering, and each target's `scrap_log` lifecycle behind `run() -> RunReport`. |
+| `main.rs` | Entrypoint and job selector (`companies`, `products`, or `all`). Seeds the portal session, calls `crawl::run`, prints the summary from the returned report. |
+| `crawl.rs` | The run orchestration: both jobs, insert ordering, and each target's `scrap_log` lifecycle behind `run() -> RunReport`. |
 | `portal.rs` | The Portal seam: base URL, PHP session, semaphore, one shared retry policy, POST `search`, and `fetch_modal`. Tests substitute an httpmock server via `Portal::new(base_url)`. |
-| `listing.rs` | The listing fetcher: `fetch_companies` (name dedup), `fetch_subcategory` (key dedup), and `fetch_company_modals` — all sharing `crawl`/`letter_crawl` (page-param pagination). |
-| `parser.rs` | HTML record extractors: `parse_table` (company spans + `comp_code`), `parse_product_table` (product rows), `parse_modal` (detail page), `extract_postcode`, `extract_state`. |
+| `listing.rs` | The listing fetcher: `fetch_companies` (name dedup), `fetch_subcategory` (key dedup), and `fetch_company_modals` (company enrichment) — all sharing `crawl`/`letter_crawl` (page-param pagination). |
+| `parser.rs` | HTML record extractors: `parse_table` (company spans + `comp_code`), `parse_product_table` (product rows), `parse_modal` (company detail fields), `extract_postcode`, `extract_state`. |
 | `records.rs` | Typed `Company`/`Product`. `Product` carries its own (category, subcategory) membership; `Company::fill_from` owns enrichment precedence. |
 | `db.rs` | PostgreSQL connect + schema/index init + upsert inserts + `sample_companies`. |
-| `config.rs` | The crawl target list (`targets()`) and progress labels (`label()`, `category_name`, `subcategory_name`). |
+| `config.rs` | The crawl target lists (`company_targets()`, `product_targets()`, `targets()`) and progress labels (`label()`, `category_name`, `subcategory_name`). |
 | `constants.rs` | `MAX_CONCURRENT`, `DEBUG_MAX_PAGES_PER_LETTER`, `DATA_PARAM`, `STATES`, `max_pages_per_letter`. |
 | `api/` | Read-only HTTP API: router, DTOs, pagination, handlers, error mapping. |
 | `bin/halal-api.rs` | API binary: binding, CORS, tracing, graceful shutdown. Uses `db::connect`, never `db::init`. |

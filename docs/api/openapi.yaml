@@ -214,10 +214,10 @@ paths:
       operationId: listCategories
       summary: List categories
       description: |
-        Every configured category and subcategory, with the number of products
-        linked to each. Categories that have not been crawled yet appear with
-        a count of zero. Products discovered through a company's modal carry
-        the company listing's `CO` subcategory.
+        Every configured product category and subcategory, with the number of
+        products linked to each. Categories that have not been crawled yet
+        appear with a count of zero. Company-listing targets are not product
+        categories and are not returned.
       responses:
         '200':
           description: Categories with product counts.
@@ -645,7 +645,7 @@ components:
       name: subcategory
       in: query
       required: false
-      description: Subcategory code, for example `PR`, `BG`, or `CO`.
+      description: Subcategory code, for example `PR`, `BG`, or `RS`.
       schema:
         type: string
         example: "PR"
@@ -840,7 +840,7 @@ components:
               subcategory_code: "PR"
           updated_at: "2026-11-15T08:00:00Z"
     CategoryListExample:
-      summary: One category with two subcategories
+      summary: One product category with a subcategory
       value:
         data:
           - category_code: "PR"
@@ -849,9 +849,6 @@ components:
               - code: "PR"
                 name: "Produk"
                 product_count: 1200
-              - code: "CO"
-                name: "Companies"
-                product_count: 250
     ScrapeRunListExample:
       summary: An open run and a completed run
       value:

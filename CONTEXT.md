@@ -25,7 +25,7 @@ A certified company listing record: name, address, postcode, state.
 _Avoid_: business, firm, Syarikat
 
 **Product**:
-A certified product or premise listing record: name, brand, certificate holder, expiry date, and the (category, subcategory) it was discovered under.
+A certified product or premise listing record: name, brand, certificate holder, expiry date, and the (category, subcategory) it was discovered under. Products are written only by the Products phase.
 _Avoid_: item, listing entry
 
 **Record**:
@@ -34,10 +34,14 @@ _Avoid_: row, JSON
 
 **Crawl**:
 One category's full sweep — all letters, all pages — producing records.
-_Avoid_: scrape run, job
+_Avoid_: scrape run
+
+**Crawl job**:
+A named selection of Crawl targets — `companies`, `products`, or `all` — run by the crawler.
+_Avoid_: phase, strategy
 
 **Run**:
-One execution of the crawler over a set of Crawl targets — both phases, with each target's `scrap_log` lifecycle and a report of counts and failures.
+One execution of the crawler over a Crawl job's targets, with each target's `scrap_log` lifecycle and a report of counts and failures.
 _Avoid_: scrape run, session
 
 **Crawl target**:
@@ -45,7 +49,7 @@ The unit a Crawl is scheduled over: a (category, ty) pair plus the phase that cr
 _Avoid_: strategy, job spec
 
 **Phase**:
-Which of the two crawl passes a Crawl target belongs to — `Companies` (letter search + modal enrichment) or `Products` (subcategory listings).
+Which of the two target classes a Crawl target belongs to — `Companies` (company listings plus company-field modal enrichment; writes only companies) or `Products` (subcategory listings; the only product writer).
 _Avoid_: stage, pass
 
 **hdnCounter**:
