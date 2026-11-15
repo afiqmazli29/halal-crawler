@@ -10,14 +10,15 @@ use crate::config;
 
 /// `GET /api/v1/categories`
 ///
-/// The list is seeded from [`config::targets`] so every configured category is
-/// present before a crawl has produced products; counts are overlaid from
-/// `product_categories`. Codes found only in the database (never in config) are
-/// appended rather than dropped.
+/// The list is seeded from [`config::product_targets`] so every product
+/// category is present before a crawl has produced products; counts are
+/// overlaid from `product_categories`. Company listing targets and legacy
+/// phase-1 `CO` memberships are not product categories, so they are omitted.
 pub async fn list(State(state): State<AppState>) -> Result<Json<Data<Vec<CategoryDto>>>, ApiError> {
     let counts: Vec<(String, String, i64)> = sqlx::query_as(
         "SELECT category_code, subcategory_code, COUNT(*)::bigint
          FROM product_categories
+         WHERE subcategory_code <> 'CO'
          GROUP BY category_code, subcategory_code",
     )
     .fetch_all(&state.pool)
@@ -31,7 +32,7 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<Data<Vec<Categor
             .insert(subcategory_code, count);
     }
 
-    for target in config::targets() {
+    for target in config::product_targets() {
         by_category
             .entry(target.category_code.to_string())
             .or_default()

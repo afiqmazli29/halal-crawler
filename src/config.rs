@@ -1,10 +1,9 @@
 use crate::types::{CrawlTarget, Phase};
 
-/// Every crawl target, in run order: phase `Companies` first, then phase
-/// `Products`. This single list is the one place "what runs" is readable.
-pub fn targets() -> Vec<CrawlTarget> {
+/// The company crawl: each category's `ty=CO` listing. These targets write
+/// only `companies`; products come from [`product_targets`].
+pub fn company_targets() -> Vec<CrawlTarget> {
     vec![
-        // ── Phase Companies: each category's `ty=CO` listing ──────────
         CrawlTarget {
             category_code: "BG",
             ty: "CO",
@@ -50,7 +49,13 @@ pub fn targets() -> Vec<CrawlTarget> {
             ty: "CO",
             phase: Phase::Companies,
         },
-        // ── Phase Products: subcategory listings (products, premises, …) ─
+    ]
+}
+
+/// The product crawl: subcategory listings (products, premises, …). These
+/// targets are the only writers of `products` and `product_categories`.
+pub fn product_targets() -> Vec<CrawlTarget> {
+    vec![
         CrawlTarget {
             category_code: "BG",
             ty: "BG",
@@ -99,6 +104,16 @@ pub fn targets() -> Vec<CrawlTarget> {
     ]
 }
 
+/// Both jobs in run order: companies first (products resolve holders against
+/// them), then products. Use [`company_targets`] or [`product_targets`] to run
+/// one job on its own.
+pub fn targets() -> Vec<CrawlTarget> {
+    company_targets()
+        .into_iter()
+        .chain(product_targets())
+        .collect()
+}
+
 /// The human-readable name for a category code. Unknown codes are returned
 /// unchanged so the API never hides data it doesn't have a label for.
 pub fn category_name(code: &str) -> &str {
@@ -128,9 +143,6 @@ pub fn subcategory_name(code: &str) -> &str {
         "HO" => "Hotel & Resort",
         "PE" => "Premis Makanan",
         "RS" => "Rumah Sembelih",
-        // Products scraped from a company's modal carry the company listing's
-        // `ty` (CO) as their membership; label it rather than echo the code.
-        "CO" => "Companies",
         other => other,
     }
 }

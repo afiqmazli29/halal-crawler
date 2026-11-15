@@ -14,6 +14,19 @@ async fn main() -> Result<(), Error> {
     let db_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost/halal".to_string());
 
+    // Pick one crawl job. `all` keeps the companies-then-products order because
+    // products resolve their holders against the companies table.
+    let job = std::env::args().nth(1).unwrap_or_else(|| "all".to_string());
+    let targets = match job.as_str() {
+        "companies" => config::company_targets(),
+        "products" => config::product_targets(),
+        "all" => config::targets(),
+        other => {
+            eprintln!("unknown job {other:?}: expected companies, products, or all");
+            std::process::exit(2);
+        }
+    };
+
     let portal = portal::Portal::new(portal::DEFAULT_BASE_URL)?;
     let pool = db::init(&db_url).await?;
 
@@ -23,10 +36,11 @@ async fn main() -> Result<(), Error> {
     let max_pages = constants::max_pages_per_letter(cfg!(debug_assertions));
 
     // Seed PHP session
+    println!("  job: {job} ({} targets)", targets.len());
     println!("  getting session...");
     portal.init_session().await?;
 
-    let report = crawl::run(&portal, &pool, &config::targets(), max_pages).await?;
+    let report = crawl::run(&portal, &pool, &targets, max_pages).await?;
 
     // ── Summary ───────────────────────────────────────────────────────
     let elapsed = started.elapsed();

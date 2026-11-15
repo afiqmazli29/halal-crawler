@@ -207,8 +207,8 @@ fn test_parse_table_missing_onclick_gives_empty_comp_code() {
 
 // ── modal detail page parsing ───────────────────────────────────────
 
-/// A minimal modal page in the live portal's shape: label/value rows
-/// followed by the Product / Menu List table.
+/// A minimal modal page in the live portal's shape: company label/value rows
+/// followed by a Product / Menu List table that `parse_modal` ignores.
 fn modal_html() -> String {
     String::from(
         "<html><body><table>\
@@ -241,7 +241,7 @@ fn modal_html() -> String {
 
 #[test]
 fn test_parse_modal_company_fields() {
-    let (company, _products) = parse_modal(&modal_html());
+    let company = parse_modal(&modal_html());
     assert_eq!(company.name, "CPL Aromas (Malaysia) Sdn. Bhd.");
     assert!(!company.address.is_empty());
     assert_eq!(company.postcode, "42920");
@@ -262,23 +262,7 @@ fn test_parse_modal_company_fields() {
 }
 
 #[test]
-fn test_parse_modal_products() {
-    let (_, products) = parse_modal(&modal_html());
-    assert_eq!(products.len(), 2);
-
-    assert_eq!(
-        products[0].name,
-        "HK314634 MALICE AF (CONCENTRATED FRAGRANCE)"
-    );
-    assert_eq!(products[0].holder, "CPL AROMAS (MALAYSIA) SDN. BHD.");
-    assert_eq!(products[0].expiry_date, "15/07/2029");
-
-    assert_eq!(products[1].expiry_date, "30/09/2028");
-}
-
-#[test]
 fn test_parse_modal_empty_html() {
-    let (company, products) = parse_modal("<html><body></body></html>");
+    let company = parse_modal("<html><body></body></html>");
     assert_eq!(company.name, "");
-    assert!(products.is_empty());
 }

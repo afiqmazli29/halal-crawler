@@ -58,8 +58,8 @@ pub async fn run(
         println!(
             "\n═══ {} ═══",
             match phase {
-                Phase::Companies => "PHASE 1: COMPANIES (a–z search + detail modals)",
-                Phase::Products => "PHASE 2: SUBCATEGORY LISTINGS",
+                Phase::Companies => "COMPANIES (a–z search + detail modals)",
+                Phase::Products => "PRODUCTS (subcategory listings)",
             }
         );
 
@@ -129,9 +129,10 @@ async fn run_target(
 }
 
 /// Phase `Companies`: discover the listing, upsert it so every company exists,
-/// then enrich each from its modal page and persist the enriched companies and
-/// their products. A failed modal pass is logged, not fatal — the listing
-/// records are already stored.
+/// then enrich each from its modal page and persist the enriched companies.
+/// Products are not read from modals; phase `Products` is the only product
+/// writer. A failed modal pass is logged, not fatal — the listing records are
+/// already stored.
 async fn run_companies(
     portal: &Portal,
     pool: &PgPool,
@@ -143,32 +144,19 @@ async fn run_companies(
     let (mut ins_total, mut upd_total) = db::insert_companies(pool, &records).await?;
     println!("│  {ins_total} inserted, {upd_total} updated from listing");
 
-    let mut products = (0, 0);
-    match listing::fetch_company_modals(portal, target, &records).await {
-        Ok(entries) => {
-            let mut companies = Vec::with_capacity(entries.len());
-            let mut all_products = Vec::new();
-            for (company, ps) in entries {
-                all_products.extend(ps);
-                companies.push(company);
-            }
+    match listing::fetch_company_modals(portal, &records).await {
+        Ok(companies) => {
             let (ins2, upd2) = db::insert_companies(pool, &companies).await?;
             println!("│  {ins2} inserted, {upd2} updated after modal enrich");
             ins_total += ins2;
             upd_total += upd2;
-
-            if !all_products.is_empty() {
-                let (pins, pupd) = db::insert_products(pool, &all_products).await?;
-                println!("│  {pins} products inserted, {pupd} products updated");
-                products = (pins, pupd);
-            }
         }
         Err(e) => eprintln!("│  ✗ modal pass failed: {}", types::error_chain(&e)),
     }
 
     Ok(TargetOutcome {
         companies: (ins_total, upd_total),
-        products,
+        products: (0, 0),
     })
 }
 

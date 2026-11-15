@@ -263,6 +263,19 @@ async fn test_categories_and_scrape_runs() {
             .any(|sub| sub["code"] == "PR" && sub["product_count"].as_i64().unwrap() >= 1)
     );
 
+    assert!(
+        body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|category| category["subcategories"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|sub| sub["code"] != "CO")),
+        "legacy CO memberships must not appear as product categories"
+    );
+
     let (status, body) = get(&app, "/api/v1/scrape-runs?limit=200").await;
     assert_eq!(status, StatusCode::OK);
     let run = body["data"]

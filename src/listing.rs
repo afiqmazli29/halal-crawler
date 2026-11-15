@@ -66,54 +66,46 @@ pub async fn fetch_subcategory(
 
 /// Fetch and parse modal detail pages for a batch of companies concurrently.
 /// Each company's `comp_code` is used to fetch its modal page, which returns
-/// enriched company data (phone, fax, email, website, etc.) and products.
-/// Products are stamped with the target's membership, so they are
-/// self-describing when handed to persistence.
+/// enriched company data (phone, fax, email, website, etc.). Products are not
+/// read from modals; the Products crawl is the only product source.
 ///
-/// Companies without a comp_code are skipped (left unchanged). Concurrency is
+/// Companies without a comp_code are carried through unchanged. Concurrency is
 /// bounded by the Portal's own semaphore, so callers need not cap it.
 pub async fn fetch_company_modals(
     portal: &Portal,
-    target: &CrawlTarget,
     companies: &[Company],
-) -> Result<Vec<(Company, Vec<Product>)>, Error> {
+) -> Result<Vec<Company>, Error> {
     let mut set = JoinSet::new();
 
     for company in companies {
         if company.comp_code.is_empty() {
             // No modal — carry through what we already have from the listing
             let company = company.clone();
-            set.spawn(async move { Ok((company, Vec::new())) });
+            set.spawn(async move { Ok::<_, Error>(company) });
             continue;
         }
 
         let portal = Portal::clone(portal);
         let comp_code = company.comp_code.clone();
         let company = company.clone();
-        let category_code = target.category_code.to_string();
-        let subcategory_code = target.ty.to_string();
 
         set.spawn(async move {
             let html = portal.fetch_modal(&comp_code).await?;
-            let (mut modal_company, mut products) = parser::parse_modal(&html);
-            for p in &mut products {
-                p.category_code = category_code.clone();
-                p.subcategory_code = subcategory_code.clone();
-            }
+            let mut modal_company = parser::parse_modal(&html);
 
             // The listing name is the company's identity — the modal may spell
             // it differently, so keep the listing's and fill the rest from it.
             modal_company.name = company.name.clone();
             modal_company.fill_from(&company);
 
-            Ok::<_, Error>((modal_company, products))
+            Ok::<_, Error>(modal_company)
         });
     }
 
     let mut all = Vec::new();
     while let Some(result) = set.join_next().await {
         match result? {
-            Ok(entry) => all.push(entry),
+            Ok(company) => all.push(company),
             Err(e) => eprintln!("│    ✗ modal fetch failed: {}", error_chain(&e)),
         }
     }

@@ -640,10 +640,11 @@ async fn test_fetch_modal_retries_server_errors() {
 }
 
 #[tokio::test]
-async fn test_fetch_company_modals_enriches_and_returns_products() {
+async fn test_fetch_company_modals_enriches_companies() {
     let ctx = common::setup_mock().await;
 
-    // The modal endpoint: company detail + product list in the live shape.
+    // The modal endpoint: company detail plus a Product / Menu List that the
+    // company crawl intentionally ignores.
     ctx.server.mock(|when, then| {
         when.method(GET)
             .path("/directory/slm_viewdetail.php")
@@ -674,12 +675,12 @@ async fn test_fetch_company_modals_enriches_and_returns_products() {
         ..Default::default()
     }];
 
-    let entries = listing::fetch_company_modals(&ctx.portal, &company_target(), &companies)
+    let companies = listing::fetch_company_modals(&ctx.portal, &companies)
         .await
         .expect("modals");
 
-    assert_eq!(entries.len(), 1);
-    let (company, products) = &entries[0];
+    assert_eq!(companies.len(), 1);
+    let company = &companies[0];
     // Enriched fields came from the modal …
     assert_eq!(company.phone_no, "03-1234567");
     assert_eq!(company.email, "a@b.example");
@@ -689,13 +690,6 @@ async fn test_fetch_company_modals_enriches_and_returns_products() {
     // Fields missing from the modal fall back to the listing values
     assert_eq!(company.address, "1 Jalan, 50000 KL, Kuala Lumpur");
     assert_eq!(company.comp_code, "COMP-20230804-000001");
-    // Products were parsed from the modal's Product / Menu List and stamped
-    // with the target's membership.
-    assert_eq!(products.len(), 1);
-    assert_eq!(products[0].name, "HK1 TEST PRODUCT A");
-    assert_eq!(products[0].expiry_date, "15/07/2029");
-    assert_eq!(products[0].category_code, "BG");
-    assert_eq!(products[0].subcategory_code, "CO");
 }
 
 #[tokio::test]
@@ -704,15 +698,14 @@ async fn test_fetch_company_modals_skips_companies_without_comp_code() {
 
     let companies = vec![common::company("tM_NoModal Co")];
 
-    let entries = listing::fetch_company_modals(&ctx.portal, &company_target(), &companies)
+    let companies = listing::fetch_company_modals(&ctx.portal, &companies)
         .await
         .expect("modals");
 
-    assert_eq!(entries.len(), 1);
-    let (company, products) = &entries[0];
+    assert_eq!(companies.len(), 1);
+    let company = &companies[0];
     assert_eq!(company.name, "tM_NoModal Co");
     assert_eq!(company.phone_no, "");
-    assert!(products.is_empty());
 }
 
 // ── DB persistence of enriched fields (needs live PostgreSQL) ────
@@ -837,7 +830,7 @@ async fn test_run_reports_counts_and_closes_scrap_log() {
                 1,
             ));
     });
-    // Its modal enriches the company and yields one product.
+    // Its modal enriches the company; its product list must be ignored.
     mock.server.mock(|when, then| {
         when.method(GET)
             .path("/directory/slm_viewdetail.php")
@@ -899,6 +892,38 @@ async fn test_run_reports_counts_and_closes_scrap_log() {
         .await
         .expect("company row");
     assert_eq!(phone, "03-1111");
+
+    // The modal's product list is not a product source: only the phase 2
+    // listing row is persisted.
+    let modal_products: i64 = sqlx::query_scalar("SELECT count(*) FROM products WHERE name = $1")
+        .bind(product_name)
+        .fetch_one(&ctx.pool)
+        .await
+        .expect("modal product count");
+    assert_eq!(modal_products, 0, "company modals must not write products");
+
+    let listed_products: i64 = sqlx::query_scalar("SELECT count(*) FROM products WHERE name = $1")
+        .bind("tRun_Prod B")
+        .fetch_one(&ctx.pool)
+        .await
+        .expect("listed product count");
+    assert_eq!(listed_products, 1, "phase 2 product should be persisted");
+
+    let company_modal_memberships: i64 = sqlx::query_scalar(
+        "SELECT count(*)
+         FROM product_categories pc
+         JOIN products p ON p.id = pc.product_id
+         WHERE p.name IN ($1, $2) AND pc.subcategory_code = 'CO'",
+    )
+    .bind(product_name)
+    .bind("tRun_Prod B")
+    .fetch_one(&ctx.pool)
+    .await
+    .expect("co memberships");
+    assert_eq!(
+        company_modal_memberships, 0,
+        "company-modal memberships must not exist"
+    );
 
     // This run opened one scrap_log row per target and closed every one.
     let (total, open): (i64, i64) = sqlx::query_as(

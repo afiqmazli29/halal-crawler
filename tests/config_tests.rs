@@ -73,6 +73,18 @@ fn test_company_label_contains_category_code() {
 }
 
 #[test]
+fn test_company_and_product_targets_are_separated() {
+    let companies = config::company_targets();
+    let products = config::product_targets();
+
+    assert!(!companies.is_empty());
+    assert!(!products.is_empty());
+    assert!(companies.iter().all(|t| t.phase == Phase::Companies));
+    assert!(products.iter().all(|t| t.phase == Phase::Products));
+    assert_eq!(config::targets().len(), companies.len() + products.len());
+}
+
+#[test]
 fn test_phase_as_str_matches_scrap_log_values() {
     assert_eq!(Phase::Companies.as_str(), "companies");
     assert_eq!(Phase::Products.as_str(), "products");
@@ -82,7 +94,6 @@ fn test_phase_as_str_matches_scrap_log_values() {
 fn test_category_and_subcategory_names_are_human_readable() {
     assert_eq!(config::category_name("PR"), "Produk Makanan/Minuman");
     assert_eq!(config::subcategory_name("PR"), "Produk");
-    assert_eq!(config::subcategory_name("CO"), "Companies");
     // Unknown codes fall back to the code itself rather than hiding data.
     assert_eq!(config::category_name("ZZ"), "ZZ");
     assert_eq!(config::subcategory_name("ZZ"), "ZZ");

@@ -255,95 +255,56 @@ fn extract_state(addr: &str) -> String {
 }
 
 /// Parse a company's modal detail page (`/directory/slm_viewdetail.php`),
-/// returning enriched company fields and the product list under
-/// "Product / Menu List".
-pub fn parse_modal(html: &str) -> (Company, Vec<Product>) {
+/// returning enriched company fields. Product rows in the modal are ignored;
+/// the Products crawl is the only product source.
+pub fn parse_modal(html: &str) -> Company {
     let document = Html::parse_document(html);
 
     let tr_sel = Selector::parse("tr").unwrap();
-    let txt_sel = Selector::parse("td.txt").unwrap();
-    let center_td_sel = Selector::parse("td[align=center]").unwrap();
+    let td_sel = Selector::parse("td").unwrap();
+    let label_sel = Selector::parse("div[align=right]").unwrap();
 
     let mut company = Company::default();
-    let mut in_product_section = false;
-    let mut products = Vec::new();
 
     for row in document.select(&tr_sel) {
-        let tds: Vec<ElementRef> = row.select(&Selector::parse("td").unwrap()).collect();
+        let tds: Vec<ElementRef> = row.select(&td_sel).collect();
+        if tds.len() < 2 {
+            continue;
+        }
 
         // Company detail rows: <tr><td><b><div align="right">Label :</div></b></td><td>value</td></tr>
-        if tds.len() >= 2 {
-            let label = tds[0]
-                .select(&Selector::parse("div[align=right]").unwrap())
-                .next()
-                .map(|el| el.text().collect::<String>().trim().to_lowercase())
-                .unwrap_or_default();
+        let label = tds[0]
+            .select(&label_sel)
+            .next()
+            .map(|el| el.text().collect::<String>().trim().to_lowercase())
+            .unwrap_or_default();
 
-            if !label.is_empty() {
-                let value = element_text(&tds[1]);
-                match label.as_str() {
-                    s if s.contains("name :") => company.name = value,
-                    s if s.contains("address :") => {
-                        company.address = element_text(&tds[1]);
-                        company.postcode = extract_postcode(&company.address);
-                        company.state = extract_state(&company.address);
-                    }
-                    s if s.contains("state :") => {
-                        if !value.is_empty() && company.state.is_empty() {
-                            company.state = value;
-                        }
-                    }
-                    s if s.contains("phone no :") => company.phone_no = value,
-                    s if s.contains("fax no") => company.fax_no = value,
-                    s if s.contains("e-mail") => company.email = value,
-                    s if s.contains("website") => company.website = value,
-                    s if s.contains("reference no") => company.reference_no = value,
-                    s if s.contains("officer") => company.officer = element_text(&tds[1]),
-                    _ => {}
-                }
-                continue;
-            }
+        if label.is_empty() {
+            continue;
         }
 
-        // Check for product section header
-        if tds.len() >= 1 {
-            let text = tds[0].text().collect::<String>().to_lowercase();
-            if text.contains("product / menu list") {
-                in_product_section = true;
-                continue;
+        let value = element_text(&tds[1]);
+        match label.as_str() {
+            s if s.contains("name :") => company.name = value,
+            s if s.contains("address :") => {
+                company.address = value;
+                company.postcode = extract_postcode(&company.address);
+                company.state = extract_state(&company.address);
             }
-        }
-
-        // Product rows: <tr> with <td class="txt"> cells
-        if in_product_section {
-            let txt_cells: Vec<ElementRef> = row.select(&txt_sel).collect();
-            if txt_cells.len() >= 2 {
-                let product_name = element_text(&txt_cells[0]);
-                let holder = element_text(&txt_cells[1]);
-
-                // Expiry lives in a <td align="center"> that is NOT the row
-                // number — it contains a dd/mm/yyyy pattern.
-                let expiry = row
-                    .select(&center_td_sel)
-                    .find(|el| {
-                        let t = el.text().collect::<String>();
-                        t.matches('/').count() == 2 && !t.trim().is_empty()
-                    })
-                    .map(|el| element_text(&el))
-                    .unwrap_or_default();
-
-                if !product_name.is_empty() {
-                    products.push(Product {
-                        name: product_name,
-                        brand: String::new(),
-                        holder,
-                        expiry_date: expiry,
-                        ..Default::default()
-                    });
+            s if s.contains("state :") => {
+                if !value.is_empty() && company.state.is_empty() {
+                    company.state = value;
                 }
             }
+            s if s.contains("phone no :") => company.phone_no = value,
+            s if s.contains("fax no") => company.fax_no = value,
+            s if s.contains("e-mail") => company.email = value,
+            s if s.contains("website") => company.website = value,
+            s if s.contains("reference no") => company.reference_no = value,
+            s if s.contains("officer") => company.officer = value,
+            _ => {}
         }
     }
 
-    (company, products)
+    company
 }
