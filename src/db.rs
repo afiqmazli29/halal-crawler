@@ -3,8 +3,17 @@ use sqlx::PgPool;
 use crate::records::{Company, Product};
 use crate::types::Error;
 
+/// Open a pool without creating or migrating anything.
+///
+/// The read-only API uses this so it can run against a role that may not own
+/// the schema. The crawler's [`init`] owns schema creation; run the crawler
+/// once before starting the API.
+pub async fn connect(db_url: &str) -> Result<PgPool, Error> {
+    Ok(PgPool::connect(db_url).await?)
+}
+
 pub async fn init(db_url: &str) -> Result<PgPool, Error> {
-    let pool = PgPool::connect(db_url).await?;
+    let pool = connect(db_url).await?;
 
     // `companies` holds only company data. Category membership and scrape
     // timing live in `scrap_log`, so a company is unique by `name` alone —
@@ -130,6 +139,21 @@ pub async fn init(db_url: &str) -> Result<PgPool, Error> {
     )
     .execute(&pool)
     .await?;
+
+    // Indexes the read API relies on. `companies(name)` is already covered by
+    // the unique constraint; these add the list filters and joins that don't
+    // get an index from a primary/unique key. Substring search still scans —
+    // a pg_trgm GIN index is a follow-up once the data justifies it.
+    for stmt in [
+        "CREATE INDEX IF NOT EXISTS idx_companies_state ON companies(state)",
+        "CREATE INDEX IF NOT EXISTS idx_products_name ON products(name)",
+        "CREATE INDEX IF NOT EXISTS idx_product_categories_lookup
+             ON product_categories(category_code, subcategory_code)",
+        "CREATE INDEX IF NOT EXISTS idx_scrap_log_started_at
+             ON scrap_log(started_at DESC)",
+    ] {
+        sqlx::query(stmt).execute(&pool).await?;
+    }
 
     println!("  DB ready: {db_url}");
     Ok(pool)

@@ -99,10 +99,10 @@ pub fn targets() -> Vec<CrawlTarget> {
     ]
 }
 
-/// The human-readable label for a target, used in progress output. Lives here
-/// beside the codes so the code→name mapping stays in one module.
-pub fn label(target: &CrawlTarget) -> String {
-    let category = match target.category_code {
+/// The human-readable name for a category code. Unknown codes are returned
+/// unchanged so the API never hides data it doesn't have a label for.
+pub fn category_name(code: &str) -> &str {
+    match code {
         "BG" => "Barang Gunaan",
         "FM" => "Farmaseutikal",
         "KO" => "Kosmetik & Dandanan",
@@ -113,24 +113,35 @@ pub fn label(target: &CrawlTarget) -> String {
         "PR" => "Produk Makanan/Minuman",
         "PS" => "Rumah Sembelihan",
         other => other,
-    };
+    }
+}
+
+/// The human-readable name for a subcategory (`ty`) code.
+pub fn subcategory_name(code: &str) -> &str {
+    match code {
+        "BG" => "Barang Gunaan",
+        "FM" => "Farmaseutikal",
+        "KO" => "Kosmetik",
+        "MD" => "Peranti Perubatan",
+        "OEM" => "OEM",
+        "PR" => "Produk",
+        "HO" => "Hotel & Resort",
+        "PE" => "Premis Makanan",
+        "RS" => "Rumah Sembelih",
+        // Products scraped from a company's modal carry the company listing's
+        // `ty` (CO) as their membership; label it rather than echo the code.
+        "CO" => "Companies",
+        other => other,
+    }
+}
+
+/// The human-readable label for a target, used in progress output. Lives here
+/// beside the codes so the code→name mapping stays in one module.
+pub fn label(target: &CrawlTarget) -> String {
+    let category = category_name(target.category_code);
 
     match target.phase {
         Phase::Companies => format!("{category} ({})", target.category_code),
-        Phase::Products => {
-            let sub = match target.ty {
-                "BG" => "Barang Gunaan",
-                "FM" => "Farmaseutikal",
-                "KO" => "Kosmetik",
-                "MD" => "Peranti Perubatan",
-                "OEM" => "OEM",
-                "PR" => "Produk",
-                "HO" => "Hotel & Resort",
-                "PE" => "Premis Makanan",
-                "RS" => "Rumah Sembelih",
-                other => other,
-            };
-            format!("{category} — {sub}")
-        }
+        Phase::Products => format!("{category} — {}", subcategory_name(target.ty)),
     }
 }

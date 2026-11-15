@@ -77,3 +77,13 @@ fn test_phase_as_str_matches_scrap_log_values() {
     assert_eq!(Phase::Companies.as_str(), "companies");
     assert_eq!(Phase::Products.as_str(), "products");
 }
+
+#[test]
+fn test_category_and_subcategory_names_are_human_readable() {
+    assert_eq!(config::category_name("PR"), "Produk Makanan/Minuman");
+    assert_eq!(config::subcategory_name("PR"), "Produk");
+    assert_eq!(config::subcategory_name("CO"), "Companies");
+    // Unknown codes fall back to the code itself rather than hiding data.
+    assert_eq!(config::category_name("ZZ"), "ZZ");
+    assert_eq!(config::subcategory_name("ZZ"), "ZZ");
+}
