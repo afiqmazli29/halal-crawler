@@ -18,17 +18,21 @@ refresh changed rows and add new ones without duplicates.
 - Reading the public directory (no authentication).
 - Two crawl phases: companies (with modal enrichment) and subcategory listings.
 - Upserting records into PostgreSQL with `scrap_log` run tracking.
+- A read-only HTTP API over the crawled data: companies, products,
+  categories, and run status.
 
 **Non-goals**
 
 - Writing anything back to the portal.
-- A UI or API over the data (consumers read the database directly).
+- A write API, or a UI over the data.
 - Real-time freshness — the intended cadence is periodic (see F2).
 
 ## 2. System overview
 
-The crate is a lib + bin: `src/lib.rs` exposes the `halal_crawler` crate,
-`src/main.rs` is the binary. Tests import `halal_crawler::...`.
+The crate is a lib plus two binaries: `src/lib.rs` exposes the
+`halal_crawler` crate, `src/main.rs` is the crawler, and
+`src/bin/halal-api.rs` is the read-only HTTP API. Tests import
+`halal_crawler::...`.
 
 `main.rs` is thin: it seeds the session and calls
 `crawl::run(&portal, &pool, &config::targets(), max_pages)`, then prints the
@@ -69,6 +73,11 @@ the run.
                  └────────────┘
 ```
 
+The API binary is a second, independent consumer of the same database. It
+builds `api::router(pool)` and reads through `db::connect`, which opens a pool
+without creating or migrating anything. It never calls the crawl modules and
+never writes.
+
 ### Module map
 
 | Module | Responsibility |
@@ -79,9 +88,11 @@ the run.
 | `parser.rs` | All HTML record extraction: `parse_table`, `parse_product_table`, `parse_modal`, `extract_postcode`, `extract_state`. |
 | `records.rs` | `Company` / `Product` types. `Product` carries its own (category, subcategory) membership; `Company::fill_from` owns enrichment precedence. |
 | `db.rs` | Schema init, upsert inserts, private `resolve_company`, `start_scrap`/`finish_scrap`, `sample_companies`. |
-| `config.rs` | `targets()` — the single list of (category, ty, phase) crawl targets — plus `label()` for progress output. |
+| `config.rs` | `targets()` — the single list of (category, ty, phase) crawl targets — plus `label()`/`category_name()`/`subcategory_name()` for progress output and API labels. |
 | `constants.rs` | `MAX_CONCURRENT`, `DEBUG_MAX_PAGES_PER_LETTER`, `DATA_PARAM`, `STATES`, `max_pages_per_letter`. |
 | `types.rs` | `Error` alias, `error_chain`, `CrawlTarget`, `Phase`. |
+| `api/` | The read-only HTTP surface: `router`, DTOs, pagination params, error mapping, and one handler module per resource. |
+| `bin/halal-api.rs` | The API binary: binding, tracing, CORS, graceful shutdown. Connects with `db::connect`. |
 
 ## 3. Domain model
 
@@ -171,7 +182,20 @@ exactly as emitted so names split across runs keep their spacing.
 
 **`db`** — owns schema init and every upsert. `resolve_company` matches a
 product holder to a company by exact name, then case-insensitive name,
-preferring the exact match.
+preferring the exact match. `connect` opens a pool without touching the schema;
+`init` is `connect` plus schema creation and is what the crawler and tests use.
+
+**`api`** — read-only. `router(pool)` wires the routes; handlers use
+`sqlx::query_as` with `FromRow` DTOs and never the crawler's write paths.
+Paginated lists (`/companies`, `/products`, `/companies/{id}/products`) are
+offset-paginated (`page`/`per_page`, capped at 100) and return `{data, meta}`;
+collections (`/categories`, `/scrape-runs`) and details return `{data}`; errors
+return `{error: {status, message}}`. Product memberships are loaded for a whole
+page in one `ANY($1)` query, not per row. The router is layer-free so tests drive
+it with `tower::ServiceExt::oneshot`; the binary adds tracing, CORS, and
+shutdown. The client contract is [`api/openapi.yaml`](api/openapi.yaml), a
+hand-written OpenAPI 3.0.3 spec; update it when a route, parameter, or response
+shape changes.
 
 ## 6. Data model & invariants
 
@@ -210,6 +234,13 @@ one-time migration for pre-split databases only.
 - **`scrap_log` is per category+phase, not per row.** The lifecycle is owned by
   `crawl::run_target`, which opens and closes the row on every branch.
 
+The API reads these tables directly. `db::init` creates the indexes the read
+queries rely on — `companies(state)`, `products(name)`,
+`product_categories(category_code, subcategory_code)`, and
+`scrap_log(started_at DESC)`; `companies(name)` is already indexed by the unique
+constraint and `products(company_id)` is covered by the leading column of
+`products(company_id, name, brand)`. The API uses `db::connect` and requires the schema to exist.
+
 ## 7. Concurrency & reliability
 
 - Concurrency is gated by one semaphore, owned by the Portal
@@ -224,6 +255,9 @@ one-time migration for pre-split databases only.
   skipped. A single bad letter never aborts a category.
 - Debug builds cap each letter at one page so a local `cargo run` doesn't chew
   through the portal's thousands of pages.
+- The API is a separate process with its own pool and no in-memory state shared
+  with a crawl. It sees committed rows only, so a reader may observe a target
+  midway through its per-company transactions.
 
 ## 8. Configuration
 
@@ -233,6 +267,9 @@ one-time migration for pre-split databases only.
 | `MAX_CONCURRENT` | 5 | `constants.rs` |
 | Max pages/letter | 1 in debug, unlimited in release | `max_pages_per_letter()` in `constants.rs` |
 | `HALAL_MAX_PAGES` | unset | env; `N` caps, `0` = unlimited |
+| `API_BIND` | loopback port 8080 | env; API listen address (`ip:port`) |
+| `API_CORS_ORIGINS` | `*` | env; comma-separated CORS allowlist |
+| `RUST_LOG` | `info,tower_http=debug` | env; API tracing filter |
 
 ## 9. Testing strategy
 
@@ -245,8 +282,12 @@ one-time migration for pre-split databases only.
 - **Run orchestration** — `crawl::run` is tested end-to-end with an httpmock
   portal and a live PostgreSQL: counts, enrichment, and the `scrap_log`
   lifecycle are asserted through the one interface.
-- **DB-backed suites** — `crawl_test.rs` and `tests/common` need a live
-  PostgreSQL; point elsewhere via `TEST_DATABASE_URL`.
+- **API** — `tests/api_test.rs` drives `api::router(pool)` with
+  `tower::ServiceExt::oneshot` against a live PostgreSQL: pagination and
+  `meta`, filters, detail/404 shape, product memberships, category counts, and
+  `scrap_log` ordering.
+- **DB-backed suites** — `crawl_test.rs`, `api_test.rs`, and `tests/common` need
+  a live PostgreSQL; point elsewhere via `TEST_DATABASE_URL`.
 - **Non-DB suites** (fast) — `parser_tests`, `records_tests`, `config_tests`,
   `constants_tests`, plus `listing`'s in-module unit tests for the pagination
   grammar and cap policy.
@@ -274,6 +315,11 @@ one-time migration for pre-split databases only.
 | D15 | `listing` owns the pagination grammar and cap policy | `total_pages` and `pages_to_fetch` are private to the module that paginates; the parser is for record extraction only. | `extract_total_pages` public in `parser`, tested away from its only caller. |
 | D16 | `crawl::run` owns both phases and the `scrap_log` lifecycle | The binary becomes thin; the run's insert ordering and log open/close are testable through one interface, and failures surface in `RunReport`. | Orchestration in `main.rs` (no test seam); a closure-based `db::with_scrap_log`. |
 | D17 | Records are built directly; no JSON adapter | Production parsing builds `Company`/`Product` in `parser.rs`; a `from_value`/`pick_str` adapter only ever served tests and its suite guarded no production path. Dropping it also drops the `serde_json` production dependency. | Keep a test-only adapter; promote it so the parser emits JSON. |
+| D18 | axum, in a second `halal-api` binary in the same crate | Tokio-native, tower middleware, and the lib keeps the test seam. The crawler stays a batch binary; the API deploys and restarts independently. | Subcommand on the crawler (couples deploy artifacts); a separate workspace crate (overhead for one API). |
+| D19 | The API uses `db::connect`, never `db::init` | The API is read-only and may run with a role that cannot create or alter tables. Schema ownership stays with the crawler; the binary fails fast if the tables are absent. | Calling `init` from the API (needs DDL privileges); a read-only flag inside `init`. |
+| D20 | `/api/v1`, `{data, meta}` lists, offset pagination | A version prefix is cheap; one envelope keeps clients uniform. `page`/`per_page` with a 100 cap is simple and predictable. Keyset pagination can be added later without changing the envelope. | Unversioned paths; a bare array for lists; keyset pagination up front (clients don't need it yet). |
+| D21 | Load product memberships in one batch per page | One `ANY($1)` query keeps a product page at three fixed round trips (count, page, memberships) instead of N+1 and avoids `json_agg`/`sqlx::Json`. | A join per product; `json_agg` in the list query. |
+| D22 | Substring search via `ILIKE`, no trigram index yet | The dataset is small enough for a scan, and `CREATE EXTENSION` often needs privileges the deploy role lacks. Revisit with `pg_trgm` GIN indexes when query latency shows it. | Requiring `pg_trgm` at init; full-text search (different matching semantics). |
 
 ## 11. Forward roadmap
 
@@ -339,6 +385,16 @@ Modal parsing is verified for a subset of categories.
 - Refine state matching if real data shows misses (e.g. "W.P. Kuala Lumpur",
   "K.L.") — `STATES` + `extract_state`.
 
+### F7 — API hardening
+
+The first API cut is public, read-only, offset-paginated, and uses `ILIKE`.
+
+- Add `pg_trgm` GIN indexes if substring search becomes slow on real data.
+- Decide whether an auth layer is needed; if so, it slots in as a layer in
+  `bin/halal-api.rs` without changing handlers.
+- Add caching headers/ETags once consumers exist.
+- Add OpenAPI generation if external clients need a formal contract.
+
 ## 12. Open questions & risks
 
 - **Holder → company ambiguity.** Two companies can share a name across
@@ -353,3 +409,11 @@ Modal parsing is verified for a subset of categories.
   explicit in the report.
 - **Modal layout drift.** The portal can change markup per category without
   notice; F4's detection is the mitigation.
+- **API is unauthenticated.** It exposes only already-public directory data,
+  but anyone who can reach the port can enumerate it. Keep the bind on loopback
+  unless a reverse proxy/allowlist is in front.
+- **Deep offset pagination and `ILIKE` counts.** Both scan; fine at current
+  scale, worth revisiting with keyset pagination and trigram indexes as data
+  grows.
+- **API needs the crawler's schema.** `db::connect` does not create tables; the
+  binary fails fast with an actionable message, but deployment order matters.

@@ -9,7 +9,7 @@ cp .env.example .env   # edit DATABASE_URL if needed
 cargo run
 ```
 
-Requires Rust 1.85+ (edition 2024) and a running PostgreSQL instance.
+Requires Rust 1.88+ (edition 2024) and a running PostgreSQL instance.
 
 ## How it works
 
@@ -22,6 +22,62 @@ The modal parsing currently targets the detail-page layout used by Barang
 Gunaan, Farmaseutikal, Kosmetik & Dandanan Diri, Peranti Perubatan, and Produk
 Makanan/Minuman — the company targets in `config::targets()`. Other categories'
 modal layouts may differ and need separate handling.
+
+## HTTP API (read-only)
+
+The crawled directory is also available over a small read-only JSON API.
+It runs as a separate binary and connects with `db::connect`, so it never
+creates or migrates tables — run the crawler once first to create the schema.
+
+```bash
+cargo run --bin halal-api
+curl 'http://localhost:8080/api/v1/companies?per_page=2'
+```
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Liveness plus a DB/schema check (503 when Postgres or the schema is unavailable) |
+| GET | `/api/v1/companies` | List companies; `q`, `state`, `page`, `per_page` |
+| GET | `/api/v1/companies/{id}` | Full company, including modal-enriched fields |
+| GET | `/api/v1/companies/{id}/products` | That company's products; paginated |
+| GET | `/api/v1/products` | List products; `q`, `company_id`, `category`, `subcategory`, `page`, `per_page` |
+| GET | `/api/v1/products/{id}` | Product detail with its category memberships |
+| GET | `/api/v1/categories` | Configured categories/subcategories with product counts |
+| GET | `/api/v1/scrape-runs` | Recent `scrap_log` rows, newest first; `limit` |
+
+Paginated lists (`/companies`, `/products`, `/companies/{id}/products`) return
+`{ "data": [...], "meta": { "page", "per_page", "total", "total_pages" } }`.
+Collections (`/categories`, `/scrape-runs`) and detail endpoints return
+`{ "data": ... }`; `/health` returns `{ "status", "db" }`. Errors return
+`{ "error": { "status": 404, "message": "company not found" } }`.
+`per_page` defaults to 20 and is capped at 100; `q` is a case-insensitive
+substring match over the resource's name and related text fields (company
+address, product brand/holder).
+
+| Setting | Default | Where |
+|---------|---------|-------|
+| `API_BIND` | loopback port 8080 | env |
+| `API_CORS_ORIGINS` | `*` (any origin) | env; comma-separated allowlist |
+| `RUST_LOG` | `info,tower_http=debug` | env |
+
+### Import into an API client
+
+The OpenAPI 3.0.3 contract is
+[`docs/api/openapi.yaml`](docs/api/openapi.yaml).
+
+| Client | Import |
+|--------|--------|
+| Postman | Import → File → select the spec |
+| Insomnia | Import → From File |
+| Bruno | Import Collection → OpenAPI |
+| Swagger UI / Redoc | Point at the file |
+
+The spec targets `http://localhost:8080`; change the server URL if `API_BIND`
+differs. Validate it with
+`npx @redocly/cli lint docs/api/openapi.yaml`.
+
+The API is public read-only: no authentication, no write endpoints. See
+[`docs/DESIGN.md`](docs/DESIGN.md) §5 for the module contract.
 
 ## Database
 
@@ -137,9 +193,11 @@ thousands of pages. `HALAL_MAX_PAGES=N` overrides the cap for any build;
 | `listing.rs` | The listing fetcher: `fetch_companies` (name dedup), `fetch_subcategory` (key dedup), and `fetch_company_modals` — all sharing `crawl`/`letter_crawl` (page-param pagination). |
 | `parser.rs` | HTML record extractors: `parse_table` (company spans + `comp_code`), `parse_product_table` (product rows), `parse_modal` (detail page), `extract_postcode`, `extract_state`. |
 | `records.rs` | Typed `Company`/`Product`. `Product` carries its own (category, subcategory) membership; `Company::fill_from` owns enrichment precedence. |
-| `db.rs` | PostgreSQL schema init + upsert inserts + `sample_companies`. |
-| `config.rs` | The crawl target list (`targets()`) and progress labels (`label()`). |
+| `db.rs` | PostgreSQL connect + schema/index init + upsert inserts + `sample_companies`. |
+| `config.rs` | The crawl target list (`targets()`) and progress labels (`label()`, `category_name`, `subcategory_name`). |
 | `constants.rs` | `MAX_CONCURRENT`, `DEBUG_MAX_PAGES_PER_LETTER`, `DATA_PARAM`, `STATES`, `max_pages_per_letter`. |
+| `api/` | Read-only HTTP API: router, DTOs, pagination, handlers, error mapping. |
+| `bin/halal-api.rs` | API binary: binding, CORS, tracing, graceful shutdown. Uses `db::connect`, never `db::init`. |
 
 The domain glossary lives in `CONTEXT.md`. The technical design — module
 contracts, data-model invariants, decision log, and forward roadmap — lives in

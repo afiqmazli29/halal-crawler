@@ -23,3 +23,10 @@
 ## Tests
 
 - [ ] Run `cargo test` against a live PostgreSQL after the retry changes
+
+## API
+
+- [ ] Add `pg_trgm` GIN indexes if `ILIKE` search becomes slow on real data
+- [ ] Decide on auth or a reverse proxy/allowlist before exposing the API port
+- [ ] Add OpenAPI generation if external clients need a formal contract
+- [ ] Revisit keyset pagination for deep pages

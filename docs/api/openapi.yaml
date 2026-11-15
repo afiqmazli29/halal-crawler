@@ -1,0 +1,902 @@
+openapi: 3.0.3
+info:
+  title: Halal Directory API
+  version: 0.1.0
+  description: |
+    Read-only JSON API over the Malaysian Halal Portal directory.
+
+    - No authentication. All operations are GET (HEAD is also supported).
+    - Missing text values are returned as empty strings, not `null`.
+    - Timestamps are RFC 3339 `date-time` values.
+    - Paginated lists return `data` plus `meta`; collections and detail
+      endpoints return `data`; errors return `error.status` and
+      `error.message`.
+    - `q` is a case-insensitive substring match. For companies it searches
+      name and address; for products it searches name, brand, holder, and
+      company name.
+servers:
+  - url: http://localhost:8080
+    description: Local default (API_BIND)
+security: []
+tags:
+  - name: Health
+    description: Liveness and schema checks.
+  - name: Companies
+    description: Company directory records and their products.
+  - name: Products
+    description: Product and premise records with category memberships.
+  - name: Categories
+    description: Configured categories and subcategories with product counts.
+  - name: Scrape runs
+    description: Recent crawl runs from `scrap_log`.
+paths:
+  /health:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      summary: Liveness and schema check
+      description: |
+        Returns 200 when Postgres is reachable and the `companies` table is
+        accessible. Returns 503 when the database is down or the table is
+        missing.
+      responses:
+        '200':
+          description: API and database are healthy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              examples:
+                default:
+                  $ref: '#/components/examples/HealthOkExample'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '503':
+          description: Database or schema unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              examples:
+                default:
+                  $ref: '#/components/examples/HealthDegradedExample'
+  /api/v1/companies:
+    get:
+      tags: [Companies]
+      operationId: listCompanies
+      summary: List companies
+      description: |
+        Companies ordered by name. Each item includes its product count.
+      parameters:
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/State'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+      responses:
+        '200':
+          description: Paginated companies.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompanyListResponse'
+              examples:
+                default:
+                  $ref: '#/components/examples/CompanyListExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/companies/{id}:
+    get:
+      tags: [Companies]
+      operationId: getCompany
+      summary: Get a company
+      description: |
+        Returns the full company record, including modal-enriched fields and
+        the portal `comp_code`.
+      parameters:
+        - $ref: '#/components/parameters/CompanyIdPath'
+      responses:
+        '200':
+          description: Company detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompanyDetailResponse'
+              examples:
+                default:
+                  $ref: '#/components/examples/CompanyDetailExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/CompanyNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/companies/{id}/products:
+    get:
+      tags: [Companies, Products]
+      operationId: listCompanyProducts
+      summary: List a company's products
+      description: |
+        Products linked to one company. When both `category` and
+        `subcategory` are supplied, they must match the same category
+        membership row.
+      parameters:
+        - $ref: '#/components/parameters/CompanyIdPath'
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/Category'
+        - $ref: '#/components/parameters/Subcategory'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+      responses:
+        '200':
+          description: Paginated products for the company.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductListResponse'
+              examples:
+                default:
+                  $ref: '#/components/examples/ProductListExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/CompanyNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/products:
+    get:
+      tags: [Products]
+      operationId: listProducts
+      summary: List products
+      description: |
+        Products ordered by name, with their company and category
+        memberships. When both `category` and `subcategory` are supplied,
+        they must match the same category membership row.
+      parameters:
+        - $ref: '#/components/parameters/Search'
+        - $ref: '#/components/parameters/CompanyIdFilter'
+        - $ref: '#/components/parameters/Category'
+        - $ref: '#/components/parameters/Subcategory'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+      responses:
+        '200':
+          description: Paginated products.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductListResponse'
+              examples:
+                default:
+                  $ref: '#/components/examples/ProductListExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/products/{id}:
+    get:
+      tags: [Products]
+      operationId: getProduct
+      summary: Get a product
+      description: Returns one product with its company and category memberships.
+      parameters:
+        - $ref: '#/components/parameters/ProductIdPath'
+      responses:
+        '200':
+          description: Product detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductDetailResponse'
+              examples:
+                default:
+                  $ref: '#/components/examples/ProductDetailExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/ProductNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/categories:
+    get:
+      tags: [Categories]
+      operationId: listCategories
+      summary: List categories
+      description: |
+        Every configured category and subcategory, with the number of products
+        linked to each. Categories that have not been crawled yet appear with
+        a count of zero. Products discovered through a company's modal carry
+        the company listing's `CO` subcategory.
+      responses:
+        '200':
+          description: Categories with product counts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryListResponse'
+              examples:
+                default:
+                  $ref: '#/components/examples/CategoryListExample'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/scrape-runs:
+    get:
+      tags: [Scrape runs]
+      operationId: listScrapeRuns
+      summary: List recent scrape runs
+      description: |
+        `scrap_log` rows, newest first. A `finished_at` of `null` means the run
+        is still open or did not close cleanly.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Recent scrape runs.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScrapeRunListResponse'
+              examples:
+                default:
+                  $ref: '#/components/examples/ScrapeRunListExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+components:
+  schemas:
+    Meta:
+      type: object
+      required: [page, per_page, total, total_pages]
+      properties:
+        page:
+          type: integer
+          format: int32
+          minimum: 1
+          example: 1
+        per_page:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 100
+          example: 20
+        total:
+          type: integer
+          format: int64
+          minimum: 0
+          example: 1
+        total_pages:
+          type: integer
+          format: int64
+          minimum: 0
+          example: 1
+    CompanySummary:
+      type: object
+      required:
+        - id
+        - name
+        - address
+        - postcode
+        - state
+        - phone_no
+        - email
+        - website
+        - product_count
+        - updated_at
+      properties:
+        id:
+          type: integer
+          format: int32
+          example: 1
+        name:
+          type: string
+          example: "ABC Sdn Bhd"
+        address:
+          type: string
+          example: "No 12, Jalan Merdeka, 50000 Kuala Lumpur"
+        postcode:
+          type: string
+          example: "50000"
+        state:
+          type: string
+          example: "Kuala Lumpur"
+        phone_no:
+          type: string
+          example: "03-12345678"
+        email:
+          type: string
+          example: "info@abc.example"
+        website:
+          type: string
+          example: "https://abc.example"
+        product_count:
+          type: integer
+          format: int64
+          example: 12
+        updated_at:
+          type: string
+          format: date-time
+          example: "2026-11-15T08:00:00Z"
+    CompanyDetail:
+      type: object
+      required:
+        - id
+        - name
+        - address
+        - postcode
+        - state
+        - phone_no
+        - fax_no
+        - email
+        - website
+        - reference_no
+        - officer
+        - comp_code
+        - product_count
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: integer
+          format: int32
+          example: 1
+        name:
+          type: string
+          example: "ABC Sdn Bhd"
+        address:
+          type: string
+          example: "No 12, Jalan Merdeka, 50000 Kuala Lumpur"
+        postcode:
+          type: string
+          example: "50000"
+        state:
+          type: string
+          example: "Kuala Lumpur"
+        phone_no:
+          type: string
+          example: "03-12345678"
+        fax_no:
+          type: string
+          example: "03-12345679"
+        email:
+          type: string
+          example: "info@abc.example"
+        website:
+          type: string
+          example: "https://abc.example"
+        reference_no:
+          type: string
+          example: "JAKIM.700-2/1/1"
+        officer:
+          type: string
+          example: "Ahmad bin Ali"
+        comp_code:
+          type: string
+          example: "COMP-20230804-130326"
+        product_count:
+          type: integer
+          format: int64
+          example: 12
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-10-01T09:00:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          example: "2026-11-15T08:00:00Z"
+    CompanyRef:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: integer
+          format: int32
+          example: 1
+        name:
+          type: string
+          example: "ABC Sdn Bhd"
+    CategoryRef:
+      type: object
+      required: [category_code, subcategory_code]
+      properties:
+        category_code:
+          type: string
+          example: "PR"
+        subcategory_code:
+          type: string
+          example: "PR"
+    Product:
+      type: object
+      required:
+        - id
+        - name
+        - brand
+        - holder
+        - expiry_date
+        - company
+        - categories
+        - updated_at
+      properties:
+        id:
+          type: integer
+          format: int32
+          example: 9
+        name:
+          type: string
+          example: "Crispy Chips"
+        brand:
+          type: string
+          example: "ABC"
+        holder:
+          type: string
+          example: "ABC Sdn Bhd"
+        expiry_date:
+          type: string
+          description: Expiry as scraped; usually `dd/mm/yyyy`.
+          example: "15/07/2029"
+        company:
+          $ref: '#/components/schemas/CompanyRef'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/CategoryRef'
+        updated_at:
+          type: string
+          format: date-time
+          example: "2026-11-15T08:00:00Z"
+    Subcategory:
+      type: object
+      required: [code, name, product_count]
+      properties:
+        code:
+          type: string
+          example: "PR"
+        name:
+          type: string
+          example: "Produk"
+        product_count:
+          type: integer
+          format: int64
+          example: 1200
+    Category:
+      type: object
+      required: [category_code, category_name, subcategories]
+      properties:
+        category_code:
+          type: string
+          example: "PR"
+        category_name:
+          type: string
+          example: "Produk Makanan/Minuman"
+        subcategories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Subcategory'
+    ScrapeRun:
+      type: object
+      required:
+        - id
+        - category_code
+        - phase
+        - started_at
+        - finished_at
+        - inserted_count
+        - updated_count
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 42
+        category_code:
+          type: string
+          example: "PR"
+        phase:
+          type: string
+          enum: [companies, products]
+          example: "products"
+        started_at:
+          type: string
+          format: date-time
+          example: "2026-11-15T07:00:00Z"
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: null
+        inserted_count:
+          type: integer
+          format: int32
+          example: 0
+        updated_count:
+          type: integer
+          format: int32
+          example: 0
+    Health:
+      type: object
+      required: [status, db]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+          example: "ok"
+        db:
+          type: string
+          enum: [ok, unavailable]
+          example: "ok"
+    ErrorDetail:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: integer
+          format: int32
+          example: 404
+        message:
+          type: string
+          example: "company not found"
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorDetail'
+    CompanyListResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompanySummary'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    CompanyDetailResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/CompanyDetail'
+    ProductListResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Product'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ProductDetailResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/Product'
+    CategoryListResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+    ScrapeRunListResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScrapeRun'
+  parameters:
+    Search:
+      name: q
+      in: query
+      required: false
+      description: |
+        Case-insensitive substring match. Companies search name and address;
+        products search name, brand, holder, and company name.
+      schema:
+        type: string
+        example: "ABC"
+    State:
+      name: state
+      in: query
+      required: false
+      description: Exact state name, as stored on the company.
+      schema:
+        type: string
+        example: "Selangor"
+    CompanyIdFilter:
+      name: company_id
+      in: query
+      required: false
+      description: Only products linked to this company.
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+        example: 1
+    Category:
+      name: category
+      in: query
+      required: false
+      description: Category code, for example `PR` or `BG`.
+      schema:
+        type: string
+        example: "PR"
+    Subcategory:
+      name: subcategory
+      in: query
+      required: false
+      description: Subcategory code, for example `PR`, `BG`, or `CO`.
+      schema:
+        type: string
+        example: "PR"
+    Page:
+      name: page
+      in: query
+      required: false
+      description: 1-based page number.
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+        default: 1
+    PerPage:
+      name: per_page
+      in: query
+      required: false
+      description: Page size. Values above 100 are clamped to 100.
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+        maximum: 100
+        default: 20
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Number of runs to return. Values above 200 are clamped to 200.
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+        maximum: 200
+        default: 20
+    CompanyIdPath:
+      name: id
+      in: path
+      required: true
+      description: Company id.
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+        example: 1
+    ProductIdPath:
+      name: id
+      in: path
+      required: true
+      description: Product id.
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+        example: 9
+  responses:
+    BadRequest:
+      description: Malformed path or query parameter.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            default:
+              $ref: '#/components/examples/BadRequestExample'
+    CompanyNotFound:
+      description: Company not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            default:
+              $ref: '#/components/examples/CompanyNotFoundExample'
+    ProductNotFound:
+      description: Product not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            default:
+              $ref: '#/components/examples/ProductNotFoundExample'
+    MethodNotAllowed:
+      description: Only GET and HEAD are supported.
+      headers:
+        Allow:
+          description: Allowed HTTP methods.
+          schema:
+            type: string
+            example: "GET, HEAD"
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            default:
+              $ref: '#/components/examples/MethodNotAllowedExample'
+    InternalError:
+      description: Unexpected server or database error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            default:
+              $ref: '#/components/examples/InternalErrorExample'
+  examples:
+    HealthOkExample:
+      summary: Healthy
+      value:
+        status: "ok"
+        db: "ok"
+    HealthDegradedExample:
+      summary: Database or schema unavailable
+      value:
+        status: "degraded"
+        db: "unavailable"
+    CompanyListExample:
+      summary: One company
+      value:
+        data:
+          - id: 1
+            name: "ABC Sdn Bhd"
+            address: "No 12, Jalan Merdeka, 50000 Kuala Lumpur"
+            postcode: "50000"
+            state: "Kuala Lumpur"
+            phone_no: "03-12345678"
+            email: "info@abc.example"
+            website: "https://abc.example"
+            product_count: 12
+            updated_at: "2026-11-15T08:00:00Z"
+        meta:
+          page: 1
+          per_page: 20
+          total: 1
+          total_pages: 1
+    CompanyDetailExample:
+      summary: A company with modal-enriched fields
+      value:
+        data:
+          id: 1
+          name: "ABC Sdn Bhd"
+          address: "No 12, Jalan Merdeka, 50000 Kuala Lumpur"
+          postcode: "50000"
+          state: "Kuala Lumpur"
+          phone_no: "03-12345678"
+          fax_no: "03-12345679"
+          email: "info@abc.example"
+          website: "https://abc.example"
+          reference_no: "JAKIM.700-2/1/1"
+          officer: "Ahmad bin Ali"
+          comp_code: "COMP-20230804-130326"
+          product_count: 12
+          created_at: "2026-10-01T09:00:00Z"
+          updated_at: "2026-11-15T08:00:00Z"
+    ProductListExample:
+      summary: One product
+      value:
+        data:
+          - id: 9
+            name: "Crispy Chips"
+            brand: "ABC"
+            holder: "ABC Sdn Bhd"
+            expiry_date: "15/07/2029"
+            company:
+              id: 1
+              name: "ABC Sdn Bhd"
+            categories:
+              - category_code: "PR"
+                subcategory_code: "PR"
+            updated_at: "2026-11-15T08:00:00Z"
+        meta:
+          page: 1
+          per_page: 20
+          total: 1
+          total_pages: 1
+    ProductDetailExample:
+      summary: Product with category membership
+      value:
+        data:
+          id: 9
+          name: "Crispy Chips"
+          brand: "ABC"
+          holder: "ABC Sdn Bhd"
+          expiry_date: "15/07/2029"
+          company:
+            id: 1
+            name: "ABC Sdn Bhd"
+          categories:
+            - category_code: "PR"
+              subcategory_code: "PR"
+          updated_at: "2026-11-15T08:00:00Z"
+    CategoryListExample:
+      summary: One category with two subcategories
+      value:
+        data:
+          - category_code: "PR"
+            category_name: "Produk Makanan/Minuman"
+            subcategories:
+              - code: "PR"
+                name: "Produk"
+                product_count: 1200
+              - code: "CO"
+                name: "Companies"
+                product_count: 250
+    ScrapeRunListExample:
+      summary: An open run and a completed run
+      value:
+        data:
+          - id: 42
+            category_code: "PR"
+            phase: "products"
+            started_at: "2026-11-15T07:00:00Z"
+            finished_at: null
+            inserted_count: 0
+            updated_count: 0
+          - id: 41
+            category_code: "PR"
+            phase: "companies"
+            started_at: "2026-11-15T06:00:00Z"
+            finished_at: "2026-11-15T06:20:00Z"
+            inserted_count: 120
+            updated_count: 4
+    BadRequestExample:
+      summary: Invalid query parameter
+      value:
+        error:
+          status: 400
+          message: "Failed to deserialize query string: page: invalid digit found in string"
+    CompanyNotFoundExample:
+      summary: Unknown company id
+      value:
+        error:
+          status: 404
+          message: "company not found"
+    ProductNotFoundExample:
+      summary: Unknown product id
+      value:
+        error:
+          status: 404
+          message: "product not found"
+    MethodNotAllowedExample:
+      summary: Wrong method
+      value:
+        error:
+          status: 405
+          message: "method not allowed"
+    InternalErrorExample:
+      summary: Unexpected failure
+      value:
+        error:
+          status: 500
+          message: "internal server error"
