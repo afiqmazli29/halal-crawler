@@ -3,6 +3,8 @@
 
 # Environment (secrets)
 .env
+.env.*
+!.env.example
 
 # Scraped data
 halal_*.json
