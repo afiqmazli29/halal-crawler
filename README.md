@@ -207,4 +207,5 @@ thousands of pages. `HALAL_MAX_PAGES=N` overrides the cap for any build;
 
 The domain glossary lives in `CONTEXT.md`. The technical design — module
 contracts, data-model invariants, decision log, and forward roadmap — lives in
-[`docs/DESIGN.md`](docs/DESIGN.md).
+[`docs/DESIGN.md`](docs/DESIGN.md). The production container deployment plan is
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
